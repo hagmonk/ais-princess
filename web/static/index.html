@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIS Vessel Tracker</title>
+
+    <!-- MapLibre GL JS -->
+    <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+
+    <!-- deck.gl standalone bundle -->
+    <script src="https://unpkg.com/deck.gl@9.0.16/dist.min.js"></script>
+
+    <!-- Tabulator -->
+    <link href="https://unpkg.com/tabulator-tables@6.2.5/dist/css/tabulator_midnight.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/tabulator-tables@6.2.5/dist/js/tabulator.min.js"></script>
+
+    <!-- uPlot -->
+    <link href="https://unpkg.com/uplot@1.6.30/dist/uPlot.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/uplot@1.6.30/dist/uPlot.iife.min.js"></script>
+
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header with global controls -->
+        <header id="header">
+            <h1>AIS Vessel Tracker</h1>
+            <div id="connection-status" class="disconnected">
+                <span class="status-dot"></span>
+                <span class="status-text">Disconnected</span>
+            </div>
+
+            <!-- Global history range control -->
+            <div id="history-control">
+                <label>History:</label>
+                <select id="history-range">
+                    <option value="0">Current only</option>
+                    <option value="900">15 min</option>
+                    <option value="1800">30 min</option>
+                    <option value="3600">1 hour</option>
+                    <option value="7200">2 hours</option>
+                    <option value="-1" selected>All data</option>
+                </select>
+                <span id="history-info"></span>
+            </div>
+
+            <div id="stats">
+                <span id="vessel-count">0 vessels</span>
+                <span id="message-count">0 messages</span>
+            </div>
+
+            <div id="map-controls">
+                <button id="locate-btn" title="Center on my location">My Location</button>
+                <select id="style-selector">
+                    <option value="dark">Dark</option>
+                    <option value="light">Light</option>
+                    <option value="voyager">Voyager</option>
+                </select>
+            </div>
+        </header>
+
+        <!-- Main content area: map + sidebar -->
+        <main id="main">
+            <!-- Map panel -->
+            <div id="map-panel">
+                <div id="map-container"></div>
+            </div>
+
+            <!-- Sidebar resize handle -->
+            <div id="sidebar-resize"></div>
+
+            <!-- Sidebar with split panels -->
+            <aside id="sidebar">
+                <!-- Top panel: vessel/message list -->
+                <div id="sidebar-top">
+                    <div id="list-tabs">
+                        <button class="list-tab active" data-list="vessels">Vessels</button>
+                        <button class="list-tab" data-list="messages">Messages</button>
+                    </div>
+                    <div id="vessels-list" class="list-content active">
+                        <div id="search-box">
+                            <input type="text" id="search-input" placeholder="Search vessels...">
+                        </div>
+                        <div id="type-filters">
+                            <button class="type-chip active" data-type="all">All</button>
+                            <button class="type-chip" data-type="passenger">Pass</button>
+                            <button class="type-chip" data-type="cargo">Cargo</button>
+                            <button class="type-chip" data-type="tanker">Tank</button>
+                            <button class="type-chip" data-type="fishing">Fish</button>
+                            <button class="type-chip" data-type="tug">Tug</button>
+                            <button class="type-chip" data-type="aton">AtoN</button>
+                            <button class="type-chip" data-type="other">Other</button>
+                        </div>
+                        <div id="vessel-table"></div>
+                    </div>
+                    <div id="messages-list" class="list-content">
+                        <div id="message-table"></div>
+                    </div>
+                </div>
+
+                <!-- Vertical resize handle -->
+                <div id="sidebar-split"></div>
+
+                <!-- Bottom panel: details (shown when vessel/message selected) -->
+                <div id="sidebar-bottom" class="hidden">
+                    <div id="detail-header">
+                        <span id="detail-title">Details</span>
+                        <button id="close-details" title="Close">×</button>
+                    </div>
+                    <div id="detail-content">
+                        <!-- Vessel details -->
+                        <div id="vessel-details"></div>
+                        <!-- Message details -->
+                        <div id="message-details" class="hidden"></div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+
+        <!-- Bottom charts panel -->
+        <div id="charts-panel" class="hidden">
+            <div id="charts-resize"></div>
+            <div id="charts-container">
+                <div id="speed-chart-wrapper">
+                    <div class="chart-label">Speed (kts)</div>
+                    <div id="speed-chart"></div>
+                </div>
+                <div id="course-chart-wrapper">
+                    <div class="chart-label">Course (°)</div>
+                    <div id="course-chart"></div>
+                </div>
+                <div id="draught-chart-wrapper">
+                    <div class="chart-label">Draught (m)</div>
+                    <div id="draught-chart"></div>
+                </div>
+            </div>
+            <!-- Highlight info shows when hovering on charts -->
+            <div id="highlight-info" class="hidden"></div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
