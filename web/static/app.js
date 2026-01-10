@@ -788,6 +788,11 @@ function selectVessel(mmsi) {
         const row = vesselTable.getRows().find(r => r.getData().mmsi === mmsi);
         if (row) { row.select(); row.scrollTo(); }
     }
+
+    // Close sidebar on mobile after selection for better UX
+    if (window.innerWidth <= 768) {
+        closeMobileSidebar();
+    }
 }
 
 // Fetch historical track from backend API
@@ -2048,6 +2053,64 @@ function initEffects() {
 }
 
 // ============================================================================
+// Mobile Sidebar
+// ============================================================================
+
+// Global close function for mobile sidebar (called from selectVessel)
+let closeMobileSidebar = () => {};
+
+function initMobileSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    const menuToggle = document.getElementById('menu-toggle');
+    const sidebarClose = document.getElementById('sidebar-close');
+
+    function openSidebar() {
+        sidebar.classList.add('open');
+        backdrop.classList.add('visible');
+        document.body.style.overflow = 'hidden'; // Prevent scroll behind
+    }
+
+    function closeSidebar() {
+        sidebar.classList.remove('open');
+        backdrop.classList.remove('visible');
+        document.body.style.overflow = '';
+    }
+
+    // Expose close function globally
+    closeMobileSidebar = closeSidebar;
+
+    // Toggle button in header
+    menuToggle.addEventListener('click', () => {
+        if (sidebar.classList.contains('open')) {
+            closeSidebar();
+        } else {
+            openSidebar();
+        }
+    });
+
+    // Close button in sidebar
+    sidebarClose.addEventListener('click', closeSidebar);
+
+    // Click backdrop to close
+    backdrop.addEventListener('click', closeSidebar);
+
+    // Close on escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+            closeSidebar();
+        }
+    });
+
+    // Handle resize - close sidebar if resizing to desktop
+    window.addEventListener('resize', () => {
+        if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
+            closeSidebar();
+        }
+    });
+}
+
+// ============================================================================
 // Initialize
 // ============================================================================
 
@@ -2071,6 +2134,7 @@ document.addEventListener('DOMContentLoaded', () => {
         initGeolocation();
         initResizeHandlers();
         initCloseDetails();
+        initMobileSidebar();
         initEffects();
         console.log('All UI initialized, connecting WebSocket...');
         connectWebSocket();

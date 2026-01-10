@@ -61,6 +61,7 @@
                     <option value="voyager">Voyager</option>
                 </select>
                 <button id="settings-btn" title="Settings">⚙</button>
+                <button id="menu-toggle" title="Toggle vessel list">☰</button>
             </div>
         </header>
 
@@ -74,8 +75,13 @@
             <!-- Sidebar resize handle -->
             <div id="sidebar-resize"></div>
 
+            <!-- Sidebar backdrop for mobile -->
+            <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
             <!-- Sidebar with split panels -->
             <aside id="sidebar">
+                <!-- Close button for mobile -->
+                <button id="sidebar-close" title="Close">×</button>
                 <!-- Top panel: vessel/message list -->
                 <div id="sidebar-top">
                     <div id="list-tabs">

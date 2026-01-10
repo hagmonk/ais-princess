@@ -889,3 +889,283 @@ html, body {
 .btn-secondary:hover {
     background: var(--bg-primary);
 }
+
+/* ============================================================================
+   Mobile Menu Toggle Button
+   ============================================================================ */
+
+#menu-toggle {
+    display: none;
+    padding: 6px 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+#menu-toggle:hover {
+    background: var(--accent-dim);
+}
+
+/* Sidebar close button - hidden on desktop */
+#sidebar-close {
+    display: none;
+}
+
+/* Sidebar backdrop - hidden on desktop */
+.sidebar-backdrop {
+    display: none;
+}
+
+/* ============================================================================
+   Mobile Responsive Layout
+   ============================================================================ */
+
+/* Tablet breakpoint */
+@media (max-width: 1024px) {
+    #header {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    #timeline-control {
+        order: 10;
+        flex: 1 1 100%;
+        max-width: none;
+    }
+
+    #sidebar {
+        width: 300px;
+        min-width: 250px;
+    }
+}
+
+/* Mobile breakpoint */
+@media (max-width: 768px) {
+    /* Header adjustments */
+    #header {
+        padding: 6px 10px;
+        gap: 8px;
+        position: relative;
+        z-index: 100;
+    }
+
+    #header h1 {
+        font-size: 14px;
+    }
+
+    /* Hide timeline on mobile - accessible via settings */
+    #timeline-control {
+        display: none;
+    }
+
+    /* Hide stats on mobile */
+    #stats {
+        display: none;
+    }
+
+    /* Compact map controls */
+    #map-controls {
+        gap: 4px;
+    }
+
+    #locate-btn,
+    #names-btn,
+    #settings-btn {
+        padding: 6px 8px;
+        font-size: 12px;
+    }
+
+    /* Hide text on some buttons, show icons */
+    #locate-btn {
+        font-size: 0;
+    }
+    #locate-btn::before {
+        content: "📍";
+        font-size: 14px;
+    }
+
+    #names-btn {
+        font-size: 0;
+    }
+    #names-btn::before {
+        content: "Aa";
+        font-size: 11px;
+        font-weight: bold;
+    }
+
+    /* Show menu toggle */
+    #menu-toggle {
+        display: block;
+        margin-left: auto;
+    }
+
+    #style-selector {
+        display: none;
+    }
+
+    /* Main layout - full width map */
+    #main {
+        position: relative;
+    }
+
+    #map-panel {
+        min-width: 100%;
+    }
+
+    /* Hide sidebar resize handle on mobile */
+    #sidebar-resize {
+        display: none;
+    }
+
+    /* Sidebar as slide-in overlay */
+    #sidebar {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 85%;
+        max-width: 350px;
+        min-width: 280px;
+        z-index: 200;
+        transform: translateX(100%);
+        transition: transform 0.3s ease-in-out;
+        box-shadow: -4px 0 20px rgba(0, 0, 0, 0.5);
+    }
+
+    #sidebar.open {
+        transform: translateX(0);
+    }
+
+    /* Sidebar backdrop for mobile */
+    .sidebar-backdrop {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 199;
+    }
+
+    .sidebar-backdrop.visible {
+        display: block;
+    }
+
+    /* Close button in sidebar header */
+    #sidebar-close {
+        display: block;
+        position: absolute;
+        top: 8px;
+        right: 10px;
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 24px;
+        cursor: pointer;
+        z-index: 10;
+        padding: 5px;
+    }
+
+    #sidebar-close:hover {
+        color: var(--text-primary);
+    }
+
+    /* Sidebar top needs padding for close button */
+    #list-tabs {
+        padding-right: 40px;
+    }
+
+    /* Charts panel adjustments */
+    #charts-panel {
+        height: 120px;
+        min-height: 80px;
+    }
+
+    #charts-container {
+        flex-direction: column;
+    }
+
+    #speed-chart-wrapper,
+    #course-chart-wrapper,
+    #draught-chart-wrapper {
+        min-height: 80px;
+    }
+
+    /* Only show one chart at a time on mobile */
+    #course-chart-wrapper,
+    #draught-chart-wrapper {
+        display: none;
+    }
+
+    /* Type filters scroll horizontally */
+    #type-filters {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+
+    #type-filters::-webkit-scrollbar {
+        display: none;
+    }
+
+    .type-chip {
+        flex-shrink: 0;
+    }
+
+    /* Detail panel adjustments */
+    #sidebar-bottom {
+        height: 200px;
+        min-height: 100px;
+    }
+
+    .detail-grid {
+        grid-template-columns: 1fr;
+    }
+
+    /* Modal adjustments */
+    .modal-content {
+        width: 95%;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+}
+
+/* Small phone breakpoint */
+@media (max-width: 480px) {
+    #header h1 {
+        font-size: 12px;
+    }
+
+    #connection-status .status-text {
+        display: none;
+    }
+
+    #sidebar {
+        width: 100%;
+        max-width: none;
+    }
+
+    /* Smaller touch targets but still accessible */
+    .type-chip {
+        padding: 4px 10px;
+        font-size: 11px;
+    }
+
+    #search-input {
+        font-size: 16px; /* Prevent iOS zoom */
+    }
+
+    /* Tabulator adjustments for small screens */
+    .tabulator .tabulator-cell {
+        padding: 8px 6px;
+    }
+
+    .tabulator {
+        font-size: 12px;
+    }
+}
