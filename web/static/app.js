@@ -706,11 +706,77 @@ function selectVessel(mmsi) {
     updateLayers();
     forceChartUpdate();  // User action - immediate update
 
+    // Fetch historical track data from backend
+    fetchTrack(mmsi);
+
     // Highlight row in table
     if (vesselTable) {
         vesselTable.deselectRow();
         const row = vesselTable.getRows().find(r => r.getData().mmsi === mmsi);
         if (row) { row.select(); row.scrollTo(); }
+    }
+}
+
+// Fetch historical track from backend API
+async function fetchTrack(mmsi) {
+    try {
+        const response = await fetch(`/api/vessel/${mmsi}/track`);
+        if (!response.ok) {
+            console.error(`Failed to fetch track for ${mmsi}: ${response.status}`);
+            return;
+        }
+
+        const data = await response.json();
+        if (!data.positions || data.positions.length === 0) {
+            console.log(`No track data for vessel ${mmsi}`);
+            return;
+        }
+
+        console.log(`Fetched ${data.positions.length} track points for vessel ${mmsi}`);
+
+        // Convert positions to track point format
+        const historicalTrack = data.positions.map(p => ({
+            lat: p.lat,
+            lon: p.lon,
+            time: new Date(p.timestamp).getTime(),
+            timestamp: p.timestamp,
+            speed: p.speed,
+            course: p.course,
+            mmsi: mmsi,
+            msgType: p.msg_type || 1,
+            heading: p.heading,
+            nav_status: p.nav_status,
+        }));
+
+        // Get existing track (from real-time WebSocket messages)
+        const existingTrack = state.tracks.get(mmsi) || [];
+
+        // Merge: historical data + any newer real-time points
+        // Historical data comes sorted DESC, so reverse for chronological order
+        historicalTrack.reverse();
+
+        // Find the latest historical timestamp
+        const latestHistorical = historicalTrack.length > 0
+            ? historicalTrack[historicalTrack.length - 1].time
+            : 0;
+
+        // Keep only real-time points newer than historical data
+        const newerPoints = existingTrack.filter(p => p.time > latestHistorical);
+
+        // Combine: historical + newer real-time
+        const mergedTrack = [...historicalTrack, ...newerPoints];
+
+        // Update state
+        state.tracks.set(mmsi, mergedTrack);
+
+        console.log(`Track for ${mmsi}: ${historicalTrack.length} historical + ${newerPoints.length} real-time = ${mergedTrack.length} total`);
+
+        // Update display if this vessel is still selected
+        if (state.selectedMmsi === mmsi) {
+            onTrackDataChanged(mmsi);
+        }
+    } catch (err) {
+        console.error(`Error fetching track for ${mmsi}:`, err);
     }
 }
 
@@ -1573,10 +1639,13 @@ function connectWebSocket() {
                 updateMessageTable();
                 updateLayers();
 
-                // Zoom to fit all vessels after history load
+                // Zoom to fit all vessels after history load (unless URL has specific vessel)
                 if (!state.mapInitialized && state.vessels.size > 0) {
                     state.mapInitialized = true;
-                    setTimeout(zoomToFitAllVessels, 100);
+                    // Don't zoom to all if URL hash specifies a vessel
+                    if (!parseUrlHash()) {
+                        setTimeout(zoomToFitAllVessels, 100);
+                    }
                 }
                 console.log('History batch processed');
                 return;
@@ -1617,6 +1686,19 @@ function handleMessage(msg, batchMode = false) {
     }
 
     const msgType = msg.msg_type;
+
+    // Always extract static vessel data if present (handles enriched messages from backend)
+    if (msg.shipname) vessel.shipname = msg.shipname.trim();
+    if (msg.callsign) vessel.callsign = msg.callsign.trim();
+    if (msg.imo) vessel.imo = msg.imo;
+    if (msg.ship_type != null) vessel.ship_type = msg.ship_type;
+    if (msg.destination) vessel.destination = msg.destination.trim();
+    if (msg.to_bow != null) vessel.to_bow = msg.to_bow;
+    if (msg.to_stern != null) vessel.to_stern = msg.to_stern;
+    if (msg.to_port != null) vessel.to_port = msg.to_port;
+    if (msg.to_starboard != null) vessel.to_starboard = msg.to_starboard;
+    // Backend sends nav_status, frontend uses status
+    if (msg.nav_status != null) vessel.status = msg.nav_status;
 
     // Position reports (1, 2, 3)
     if ([1, 2, 3].includes(msgType)) {
@@ -1762,6 +1844,7 @@ function selectVesselFromHash() {
     if (mmsi && state.vessels.has(mmsi)) {
         console.log(`Selecting vessel from URL hash: ${mmsi}`);
         selectVessel(mmsi);
+        zoomToVessel(mmsi);
     } else if (mmsi) {
         console.log(`Vessel ${mmsi} from URL hash not found yet, will retry...`);
         // Retry after a short delay (data might still be loading)
@@ -1769,8 +1852,16 @@ function selectVesselFromHash() {
             if (state.vessels.has(mmsi)) {
                 console.log(`Selecting vessel from URL hash (retry): ${mmsi}`);
                 selectVessel(mmsi);
+                zoomToVessel(mmsi);
             }
         }, 1000);
+    }
+}
+
+function zoomToVessel(mmsi) {
+    const vessel = state.vessels.get(mmsi);
+    if (vessel && vessel.lat != null && vessel.lon != null) {
+        map.flyTo({ center: [vessel.lon, vessel.lat], zoom: 12 });
     }
 }
 

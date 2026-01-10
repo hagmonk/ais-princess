@@ -31,21 +31,59 @@ bd sync               # Sync with git
 6. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
-- **NEVER push to remote** - The user will push manually
-- **NEVER run `git push`** - Local commits only
-- You may run `git pull --rebase` to sync before committing
+- **NEVER run `git commit`** - User's git uses GPG signing which breaks in this context
+- **NEVER push to remote** - The user will handle all git operations
+- You may run `git status`, `git diff`, `git add` to stage changes
 - You may run `bd sync` to sync issue tracking
+- Leave staged changes for the user to commit
+
+---
+
+# Project Overview
+
+**ais-princess** is an AIS (Automatic Identification System) receiver and visualization system. It captures raw AIS radio signals from an RTL-SDR dongle, stores them in SQLite, decodes the messages (including extended DAC/FID binary payloads), and displays vessel positions on a real-time web map.
+
+## Project Structure
+
+```
+ais-princess/
+├── capture/              # AIS data capture from RTL-SDR
+│   └── ais-catcher.py    # Main capture script (runs AIS-catcher, stores NMEA to SQLite)
+├── db/                   # Database files
+│   └── ais-data.db       # SQLite database with raw NMEA messages
+├── dac-fid-decoder/      # Library for decoding binary AIS payloads
+│   ├── src/ais_binary/   # Decoder modules (DAC 001, 200, 367)
+│   ├── tests/            # Unit tests
+│   └── examples/         # Usage examples
+└── web/                  # Web UI for real-time vessel display
+    ├── main.py           # FastAPI backend (polls SQLite, broadcasts via WebSocket)
+    └── static/           # Frontend (index.html, app.js, style.css)
+```
 
 ---
 
 # Project Rules
+
+## Must Have
+
+- **No build system**: Frontend uses plain HTML/JS loaded via CDN script tags. No webpack, vite, npm, or Node.js tooling.
+- **uv for Python**: All Python package management and execution via uv.
+- **Stateless backend**: Backend decodes and broadcasts. Frontend maintains all vessel state.
+
+## Must Not
+
+- **Do not run `git commit`** - User's git uses GPG signing which fails in agent context
+- Do not use React, Vue, Svelte, or any frontend framework requiring a build step
+- Do not use npm, yarn, or any JavaScript package manager
+- Do not implement authentication or authorization
+- Do not design for horizontal scaling, multiple workers, or remote access
 
 ## Development Environment
 
 ### Python
 - **Always use `uv`** to run Python scripts and manage dependencies
 - Use inline script dependencies in the `# /// script` format
-- Default database path: `ais-data.db`
+- Default database path: `db/ais-data.db`
 
 ### JavaScript / Frontend
 - **No build step required** - use CDN dependencies only
@@ -60,7 +98,7 @@ bd sync               # Sync with git
 
 ### Capture
 - **Capture 100% of AIS messages** - never drop data
-- Use UDP protocol with rtl_ais (not stdout parsing)
+- Use UDP protocol with AIS-catcher (not stdout parsing)
 - Store raw NMEA sentences in SQLite for reprocessing
 - Handle multi-part messages (e.g., Type 5 is 2-part)
 
@@ -73,12 +111,36 @@ bd sync               # Sync with git
 ## Architecture
 
 ```
-rtl-ais.py      - Raw NMEA collector (UDP from rtl_ais → SQLite)
-main.py         - FastAPI backend (SQLite polling → WebSocket broadcast)
-static/         - Frontend (no build step)
-  index.html    - Main page with CDN dependencies
-  app.js        - Application logic
-  style.css     - Dark theme styling
+capture/
+  ais-catcher.py     - Raw NMEA collector (runs AIS-catcher, UDP → SQLite)
+db/
+  ais-data.db        - SQLite database (raw NMEA + decoded data)
+  migrate.py         - Schema migration (tables, triggers, indexes)
+  decoder.py         - Decoder service (raw → positions/vessels)
+dac-fid-decoder/
+  src/ais_binary/    - DAC/FID binary payload decoders
+    dac001.py        - IMO international messages
+    dac200.py        - Inland waterway messages
+    dac367.py        - US/NOAA messages
+    bitreader.py     - Bit-level parsing utilities
+web/
+  main.py            - FastAPI backend (reads decoded tables → WebSocket)
+  static/
+    index.html       - Main page with CDN dependencies
+    app.js           - Application logic
+    style.css        - Dark theme styling
+```
+
+### Data Flow
+
+```
+RTL-SDR → AIS-catcher → UDP → ais-catcher.py → raw_messages (queue)
+                                                      ↓
+                                               decoder.py
+                                                      ↓
+                                        positions/vessels/latest_positions
+                                                      ↓
+Browser ← WebSocket ← main.py (polling positions) ←──┘
 ```
 
 ## Message Types Handled
@@ -96,13 +158,108 @@ static/         - Frontend (no build step)
 
 ## Running the Application
 
-```bash
-# Start the data collector (requires RTL-SDR)
-uv run rtl-ais.py --gain 496 --ppm 0
+### Using ais-tmux (Recommended)
 
-# Start the web server
-uv run main.py --port 8000
+The `ais-tmux` tool manages all three services in tmux panes:
+
+```
+┌─────────────────┐
+│    web (0)      │  <- Web server (main.py)
+├─────────────────┤
+│   decoder (1)   │  <- Message decoder (decoder.py) - continuous
+├─────────────────┤
+│   capture (2)   │  <- AIS capture (ais-catcher.py)
+└─────────────────┘
+```
+
+```bash
+# Start all services in tmux
+uv run ais-tmux
+
+# Force recreate session (if pane count is wrong)
+uv run ais-tmux --force
+
+# Check status
+uv run ais-tmux --status
+
+# Restart individual services (after code changes)
+uv run ais-tmux --restart-web
+uv run ais-tmux --restart-decoder
+uv run ais-tmux --restart-capture
+
+# Stop all services
+uv run ais-tmux --stop
+
+# Attach to the tmux session
+tmux attach -t ais-princess
+```
+
+### Manual Startup
+
+```bash
+# 1. Start the data collector (requires RTL-SDR and AIS-catcher installed)
+uv run capture/ais-catcher.py --tuner 49.6
+
+# 2. Start the decoder service (processes raw messages into decoded tables)
+uv run db/decoder.py
+
+# 3. Start the web server
+uv run web/main.py --port 8000
 
 # Open http://localhost:8000 in browser
 ```
+
+### One-time Setup / Backfill
+
+```bash
+# Run database migration (creates tables, triggers, indexes)
+uv run db/migrate.py
+
+# Process existing raw messages (one-shot mode)
+uv run db/decoder.py --once --batch-size 5000
+
+# Run dac-fid-decoder tests
+cd dac-fid-decoder && uv run pytest
+```
+
+## Database Architecture
+
+The system uses a queue-based architecture where capture never fails:
+
+```
+ais-catcher.py → raw_messages (queue) → decoder.py → positions/vessels/etc
+     |                                       |
+     | NEVER fails                           | Can fail safely
+     | NEVER loses data                      | Retryable
+```
+
+### Tables
+
+| Table | Purpose |
+|-------|---------|
+| `raw_messages` | Queue + audit trail (raw NMEA) |
+| `positions` | Decoded position reports |
+| `vessels` | Static vessel data (name, callsign, etc.) |
+| `latest_positions` | Trigger-maintained, one row per vessel |
+| `base_stations` | Base station reports |
+| `nav_aids` | Navigation aids |
+
+### Key Queries
+
+```sql
+-- Instant UI load (<10ms)
+SELECT * FROM latest_positions;
+
+-- Full track for a vessel
+SELECT * FROM positions WHERE mmsi = ? ORDER BY timestamp DESC;
+```
+
+## dac-fid-decoder Library
+
+The `dac-fid-decoder` module decodes binary payloads from AIS message types 6, 8, 25, and 26 that pyais extracts but doesn't interpret. These contain application-specific messages (meteorological data, navigation warnings, inland waterway info, etc.).
+
+Supported DACs:
+- **DAC 001** (IMO International): Met/Hydro, Area Notice, Route Info, etc.
+- **DAC 200** (Inland Waterways): Ship static, ETA/RTA, water levels
+- **DAC 367** (US/NOAA): Environmental/weather data
 
