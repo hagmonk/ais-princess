@@ -182,7 +182,8 @@ uv run ais-tmux --force
 # Check status
 uv run ais-tmux --status
 
-# Restart individual services (after code changes)
+# Restart services (after code changes)
+uv run ais-tmux --restart-all
 uv run ais-tmux --restart-web
 uv run ais-tmux --restart-decoder
 uv run ais-tmux --restart-capture

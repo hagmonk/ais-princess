@@ -95,6 +95,7 @@ async def send_history(websocket: WebSocket):
                 """
                 SELECT mmsi, timestamp, msg_type, lat, lon, speed, course, heading,
                        nav_status, shipname, callsign, imo, ship_type, destination,
+                       draught, eta_month, eta_day, eta_hour, eta_minute,
                        to_bow, to_stern, to_port, to_starboard
                 FROM latest_positions
                 ORDER BY timestamp DESC
@@ -221,6 +222,7 @@ async def get_latest_positions():
             """
             SELECT mmsi, timestamp, msg_type, lat, lon, speed, course, heading,
                    nav_status, shipname, callsign, imo, ship_type, destination,
+                   draught, eta_month, eta_day, eta_hour, eta_minute,
                    to_bow, to_stern, to_port, to_starboard
             FROM latest_positions
             ORDER BY timestamp DESC
@@ -351,6 +353,23 @@ async def get_stats():
                     stats["decode_status"]["partial"] = count
 
     return stats
+
+
+@app.get("/api/timerange")
+async def get_timerange():
+    """Return the time range of all position data (oldest and newest timestamps)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT MIN(timestamp), MAX(timestamp) FROM positions"
+        ) as cursor:
+            row = await cursor.fetchone()
+
+        if row and row[0] and row[1]:
+            return {
+                "oldest": row[0],
+                "newest": row[1],
+            }
+        return {"oldest": None, "newest": None}
 
 
 @app.websocket("/ws/ais")

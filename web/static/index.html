@@ -20,6 +20,15 @@
     <link href="https://unpkg.com/uplot@1.6.30/dist/uPlot.min.css" rel="stylesheet">
     <script src="https://unpkg.com/uplot@1.6.30/dist/uPlot.iife.min.js"></script>
 
+    <!-- Import map for ES modules -->
+    <script type="importmap">
+    {
+        "imports": {
+            "@preact/signals-core": "https://esm.sh/@preact/signals-core@1.8.0"
+        }
+    }
+    </script>
+
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -32,18 +41,10 @@
                 <span class="status-text">Disconnected</span>
             </div>
 
-            <!-- Global history range control -->
-            <div id="history-control">
-                <label>History:</label>
-                <select id="history-range">
-                    <option value="0">Current only</option>
-                    <option value="900">15 min</option>
-                    <option value="1800">30 min</option>
-                    <option value="3600">1 hour</option>
-                    <option value="7200">2 hours</option>
-                    <option value="-1" selected>All data</option>
-                </select>
-                <span id="history-info"></span>
+            <!-- Global timeline slider -->
+            <div id="timeline-control">
+                <input type="range" id="timeline-slider" min="0" max="100" value="100">
+                <span id="timeline-label">Now</span>
             </div>
 
             <div id="stats">
@@ -53,11 +54,13 @@
 
             <div id="map-controls">
                 <button id="locate-btn" title="Center on my location">My Location</button>
+                <button id="names-btn" title="Toggle vessel names">Names</button>
                 <select id="style-selector">
                     <option value="dark">Dark</option>
                     <option value="light">Light</option>
                     <option value="voyager">Voyager</option>
                 </select>
+                <button id="settings-btn" title="Settings">⚙</button>
             </div>
         </header>
 
@@ -141,6 +144,64 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button class="modal-close" title="Close">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-section">
+                    <h3>Display</h3>
+                    <div class="setting-row">
+                        <label for="setting-vessel-age">Show vessels active within:</label>
+                        <select id="setting-vessel-age">
+                            <option value="60">1 minute</option>
+                            <option value="300">5 minutes</option>
+                            <option value="600">10 minutes</option>
+                            <option value="1800">30 minutes</option>
+                            <option value="3600">1 hour</option>
+                            <option value="-1">All time</option>
+                        </select>
+                    </div>
+                    <div class="setting-row">
+                        <label>
+                            <input type="checkbox" id="setting-show-names">
+                            Show vessel names on map
+                        </label>
+                    </div>
+                </div>
+                <div class="settings-section">
+                    <h3>Charts</h3>
+                    <div class="setting-row">
+                        <label>
+                            <input type="checkbox" id="setting-chart-speed" checked>
+                            Speed chart
+                        </label>
+                    </div>
+                    <div class="setting-row">
+                        <label>
+                            <input type="checkbox" id="setting-chart-course" checked>
+                            Course chart
+                        </label>
+                    </div>
+                    <div class="setting-row">
+                        <label>
+                            <input type="checkbox" id="setting-chart-draught" checked>
+                            Draught chart
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="settings-reset" class="btn-secondary">Reset to Defaults</button>
+                <button id="settings-save" class="btn-primary">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/static/app.js"></script>
 </body>
 </html>

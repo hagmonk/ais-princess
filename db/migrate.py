@@ -30,6 +30,12 @@ def _needs_recreation(conn: sqlite3.Connection) -> bool:
     if vessel_columns and "shipname" not in vessel_columns:
         return True
 
+    # Check latest_positions for draught column
+    cursor = conn.execute("PRAGMA table_info(latest_positions)")
+    lp_columns = {row[1] for row in cursor.fetchall()}
+    if lp_columns and "draught" not in lp_columns:
+        return True
+
     return False
 
 
@@ -199,6 +205,11 @@ def migrate(db_path: Path, force_recreate: bool = False):
             imo INTEGER,
             ship_type INTEGER,
             destination TEXT,
+            draught REAL,
+            eta_month INTEGER,
+            eta_day INTEGER,
+            eta_hour INTEGER,
+            eta_minute INTEGER,
             to_bow INTEGER,
             to_stern INTEGER,
             to_port INTEGER,
@@ -225,12 +236,14 @@ def migrate(db_path: Path, force_recreate: bool = False):
                 mmsi, raw_message_id, timestamp, msg_type, lat, lon,
                 speed, course, heading, nav_status,
                 shipname, callsign, imo, ship_type, destination,
+                draught, eta_month, eta_day, eta_hour, eta_minute,
                 to_bow, to_stern, to_port, to_starboard
             )
             SELECT
                 NEW.mmsi, NEW.raw_message_id, NEW.timestamp, NEW.msg_type,
                 NEW.lat, NEW.lon, NEW.speed, NEW.course, NEW.heading, NEW.nav_status,
                 v.shipname, v.callsign, v.imo, v.ship_type, v.destination,
+                v.draught, v.eta_month, v.eta_day, v.eta_hour, v.eta_minute,
                 v.to_bow, v.to_stern, v.to_port, v.to_starboard
             FROM (SELECT 1) AS dummy
             LEFT JOIN vessels v ON v.mmsi = NEW.mmsi
@@ -249,6 +262,11 @@ def migrate(db_path: Path, force_recreate: bool = False):
                 imo = COALESCE(excluded.imo, latest_positions.imo),
                 ship_type = COALESCE(excluded.ship_type, latest_positions.ship_type),
                 destination = COALESCE(excluded.destination, latest_positions.destination),
+                draught = COALESCE(excluded.draught, latest_positions.draught),
+                eta_month = COALESCE(excluded.eta_month, latest_positions.eta_month),
+                eta_day = COALESCE(excluded.eta_day, latest_positions.eta_day),
+                eta_hour = COALESCE(excluded.eta_hour, latest_positions.eta_hour),
+                eta_minute = COALESCE(excluded.eta_minute, latest_positions.eta_minute),
                 to_bow = COALESCE(excluded.to_bow, latest_positions.to_bow),
                 to_stern = COALESCE(excluded.to_stern, latest_positions.to_stern),
                 to_port = COALESCE(excluded.to_port, latest_positions.to_port),
@@ -267,6 +285,11 @@ def migrate(db_path: Path, force_recreate: bool = False):
                 imo = COALESCE(NEW.imo, imo),
                 ship_type = COALESCE(NEW.ship_type, ship_type),
                 destination = COALESCE(NEW.destination, destination),
+                draught = COALESCE(NEW.draught, draught),
+                eta_month = COALESCE(NEW.eta_month, eta_month),
+                eta_day = COALESCE(NEW.eta_day, eta_day),
+                eta_hour = COALESCE(NEW.eta_hour, eta_hour),
+                eta_minute = COALESCE(NEW.eta_minute, eta_minute),
                 to_bow = COALESCE(NEW.to_bow, to_bow),
                 to_stern = COALESCE(NEW.to_stern, to_stern),
                 to_port = COALESCE(NEW.to_port, to_port),
@@ -286,6 +309,11 @@ def migrate(db_path: Path, force_recreate: bool = False):
                 imo = COALESCE(NEW.imo, imo),
                 ship_type = COALESCE(NEW.ship_type, ship_type),
                 destination = COALESCE(NEW.destination, destination),
+                draught = COALESCE(NEW.draught, draught),
+                eta_month = COALESCE(NEW.eta_month, eta_month),
+                eta_day = COALESCE(NEW.eta_day, eta_day),
+                eta_hour = COALESCE(NEW.eta_hour, eta_hour),
+                eta_minute = COALESCE(NEW.eta_minute, eta_minute),
                 to_bow = COALESCE(NEW.to_bow, to_bow),
                 to_stern = COALESCE(NEW.to_stern, to_stern),
                 to_port = COALESCE(NEW.to_port, to_port),

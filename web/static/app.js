@@ -1,90 +1,147 @@
 /**
  * AIS Vessel Tracker - Frontend Application
- * Major refactor for hierarchical UI, global history, and highlight sync
+ * Uses @preact/signals-core for reactive state management.
  */
 
-// ============================================================================
-// State Management
-// ============================================================================
-
-const state = {
-    vessels: new Map(),      // mmsi -> vessel data
-    tracks: new Map(),       // mmsi -> position history array
-    messages: [],            // raw message history
-    selectedMmsi: null,      // currently selected vessel
-    selectedMessage: null,   // currently selected message for detail view
-    highlightPoint: null,    // currently hovered point {time, lat, lon, speed, course}
-    clickedPoint: null,      // persistently clicked point (survives hover changes)
-    historyRange: -1,        // -1 = all, 0 = current only, >0 = seconds
-    historyStart: null,      // null or timestamp (ms) for custom range from chart selection
-    historyEnd: null,        // null or timestamp (ms) for custom range from chart selection
-    mapStyle: 'dark',
-    messageCount: 0,
-    connected: false,
-    mapInitialized: false,
-    typeFilter: 'all',
-};
-
-// Ship type codes to category names
-const SHIP_TYPES = {
-    0: 'Unknown',
-    20: 'Wing in Ground', 21: 'WIG Hazardous A', 22: 'WIG Hazardous B',
-    30: 'Fishing', 31: 'Towing', 32: 'Towing Large', 33: 'Dredging',
-    34: 'Diving', 35: 'Military', 36: 'Sailing', 37: 'Pleasure',
-    40: 'High Speed', 50: 'Pilot', 51: 'SAR', 52: 'Tug', 53: 'Port Tender',
-    54: 'Anti-pollution', 55: 'Law Enforcement', 58: 'Medical', 59: 'Noncombatant',
-    60: 'Passenger', 61: 'Passenger', 62: 'Passenger', 63: 'Passenger',
-    64: 'Passenger', 69: 'Passenger',
-    70: 'Cargo', 71: 'Cargo', 72: 'Cargo', 73: 'Cargo', 74: 'Cargo', 79: 'Cargo',
-    80: 'Tanker', 81: 'Tanker', 82: 'Tanker', 83: 'Tanker', 84: 'Tanker', 89: 'Tanker',
-    90: 'Other', 91: 'Other', 92: 'Other', 93: 'Other', 94: 'Other', 99: 'Other',
-};
-
-const NAV_STATUS = {
-    0: 'Under way using engine', 1: 'At anchor', 2: 'Not under command',
-    3: 'Restricted maneuverability', 4: 'Constrained by draught', 5: 'Moored',
-    6: 'Aground', 7: 'Fishing', 8: 'Under way sailing', 11: 'Towing astern',
-    12: 'Pushing ahead', 14: 'AIS-SART', 15: 'Undefined',
-};
-
-// Aid-to-Navigation types (Message Type 21)
-const ATON_TYPES = {
-    0: 'Unspecified',
-    1: 'Reference Point',
-    2: 'RACON',
-    3: 'Fixed Structure',
-    4: 'Emergency Wreck Marking Buoy',
-    5: 'Light (no sectors)',
-    6: 'Light (with sectors)',
-    7: 'Leading Light Front',
-    8: 'Leading Light Rear',
-    9: 'Beacon, Cardinal N',
-    10: 'Beacon, Cardinal E',
-    11: 'Beacon, Cardinal S',
-    12: 'Beacon, Cardinal W',
-    13: 'Beacon, Port Hand',
-    14: 'Beacon, Starboard Hand',
-    15: 'Beacon, Preferred Channel Port',
-    16: 'Beacon, Preferred Channel Starboard',
-    17: 'Beacon, Isolated Danger',
-    18: 'Beacon, Safe Water',
-    19: 'Beacon, Special Mark',
-    20: 'Cardinal Mark N',
-    21: 'Cardinal Mark E',
-    22: 'Cardinal Mark S',
-    23: 'Cardinal Mark W',
-    24: 'Port Hand Mark',
-    25: 'Starboard Hand Mark',
-    26: 'Preferred Channel Port',
-    27: 'Preferred Channel Starboard',
-    28: 'Isolated Danger',
-    29: 'Safe Water',
-    30: 'Special Mark',
-    31: 'Light Vessel / LANBY',
-};
+import {
+    // Core signals
+    vessels,
+    tracks,
+    messages,
+    selectedMmsi,
+    selectedMessage,
+    highlightPoint,
+    clickedPoint,
+    timelinePosition,
+    timelineOldest,
+    timelineNewest,
+    mapStyle,
+    connected,
+    mapInitialized,
+    typeFilter,
+    searchText,
+    settings,
+    viewportBounds,
+    // Computed signals
+    filteredVessels,
+    visibleVesselCount,
+    totalVesselCount,
+    messageCount,
+    selectedVessel,
+    selectedTrack,
+    viewportFilteredTrack,
+    timelineValue,
+    timelineCutoff,
+    timelineEnd,
+    // Actions
+    updateVessel,
+    addTrackPoint,
+    setTrack,
+    addMessage,
+    selectVessel as selectVesselAction,
+    deselectVessel,
+    setHighlightPoint,
+    setClickedPoint,
+    setTimelinePosition,
+    setTimelineRange,
+    setTypeFilter,
+    setSearchText,
+    setMapStyle,
+    setConnected,
+    setMapInitialized,
+    setViewportBounds,
+    updateSettings,
+    updateChartSettings,
+    resetSettings,
+    batchUpdate,
+    registerEffect,
+    // Constants
+    SHIP_TYPES,
+    NAV_STATUS,
+    ATON_TYPES,
+    MAX_MESSAGES,
+} from './state.js';
 
 const MAX_TRACK_POINTS = Infinity;  // No limit - load all available history
-const MAX_MESSAGES = 1000;
+
+// ============================================================================
+// Settings Management (uses signals from state.js)
+// ============================================================================
+
+function applySettings() {
+    const s = settings.value;
+    // Apply vessel names toggle
+    const namesBtn = document.getElementById('names-btn');
+    if (s.showVesselNames) {
+        namesBtn.classList.add('active');
+    } else {
+        namesBtn.classList.remove('active');
+    }
+
+    // Apply chart visibility
+    const speedWrapper = document.getElementById('speed-chart-wrapper');
+    const courseWrapper = document.getElementById('course-chart-wrapper');
+    const draughtWrapper = document.getElementById('draught-chart-wrapper');
+
+    if (speedWrapper) speedWrapper.style.display = s.charts.speed ? 'flex' : 'none';
+    if (courseWrapper) courseWrapper.style.display = s.charts.course ? 'flex' : 'none';
+    if (draughtWrapper) draughtWrapper.style.display = s.charts.draught ? 'flex' : 'none';
+}
+
+function updateSettingsModal() {
+    const s = settings.value;
+    document.getElementById('setting-vessel-age').value = s.vesselAgeCutoff;
+    document.getElementById('setting-show-names').checked = s.showVesselNames;
+    document.getElementById('setting-chart-speed').checked = s.charts.speed;
+    document.getElementById('setting-chart-course').checked = s.charts.course;
+    document.getElementById('setting-chart-draught').checked = s.charts.draught;
+}
+
+function openSettingsModal() {
+    updateSettingsModal();
+    document.getElementById('settings-modal').classList.remove('hidden');
+}
+
+function closeSettingsModal() {
+    document.getElementById('settings-modal').classList.add('hidden');
+}
+
+function saveSettingsFromModal() {
+    updateSettings({
+        vesselAgeCutoff: parseInt(document.getElementById('setting-vessel-age').value, 10),
+        showVesselNames: document.getElementById('setting-show-names').checked,
+    });
+    updateChartSettings({
+        speed: document.getElementById('setting-chart-speed').checked,
+        course: document.getElementById('setting-chart-course').checked,
+        draught: document.getElementById('setting-chart-draught').checked,
+    });
+    closeSettingsModal();
+}
+
+function initSettings() {
+    // Settings button
+    document.getElementById('settings-btn').addEventListener('click', openSettingsModal);
+
+    // Modal close buttons
+    document.querySelector('#settings-modal .modal-close').addEventListener('click', closeSettingsModal);
+    document.querySelector('#settings-modal .modal-backdrop').addEventListener('click', closeSettingsModal);
+
+    // Save and reset buttons
+    document.getElementById('settings-save').addEventListener('click', saveSettingsFromModal);
+    document.getElementById('settings-reset').addEventListener('click', () => {
+        resetSettings();
+        updateSettingsModal();
+    });
+
+    // Names toggle button (quick toggle without opening settings)
+    document.getElementById('names-btn').addEventListener('click', () => {
+        updateSettings({ showVesselNames: !settings.value.showVesselNames });
+    });
+
+    // Apply initial settings
+    applySettings();
+}
 
 // ============================================================================
 // Port Database (UN/LOCODE format: 2-letter country + 3-letter location)
@@ -215,9 +272,8 @@ function onTrackDataChanged(mmsi) {
     // Always update layers immediately
     updateLayers();
 
-    // Update history info if this is the selected vessel
-    if (state.selectedMmsi === mmsi) {
-        updateHistoryInfo();
+    // Update charts if this is the selected vessel
+    if (selectedMmsi.value === mmsi) {
         // Schedule throttled chart update
         scheduleChartUpdate();
     }
@@ -227,7 +283,7 @@ function onTrackDataChanged(mmsi) {
 function onVesselDataChanged(mmsi) {
     updateVesselTable();
 
-    if (state.selectedMmsi === mmsi) {
+    if (selectedMmsi.value === mmsi) {
         updateVesselDetails();
     }
 }
@@ -269,7 +325,7 @@ let highlightMarker = null;
 function initMap() {
     map = new maplibregl.Map({
         container: 'map-container',
-        style: MAP_STYLES[state.mapStyle],
+        style: MAP_STYLES[mapStyle.value],
         center: [0, 0],
         zoom: 2,
     });
@@ -285,11 +341,15 @@ function initMap() {
         updateHighlightMarker();
     });
 
-    // Update charts when map viewport changes (zoom/pan)
+    // Update viewport bounds for chart filtering and trigger chart rebuild
     map.on('moveend', () => {
-        if (state.selectedMmsi && state.historyRange === -1) {
+        const bounds = map.getBounds();
+        setViewportBounds({
+            sw: { lat: bounds.getSouthWest().lat, lng: bounds.getSouthWest().lng },
+            ne: { lat: bounds.getNorthEast().lat, lng: bounds.getNorthEast().lng },
+        });
+        if (selectedMmsi.value) {
             updateCharts();
-            updateHistoryInfo();
         }
     });
 }
@@ -298,6 +358,12 @@ function initDeckOverlay() {
     deckOverlay = new deck.MapboxOverlay({
         layers: [],
         getTooltip: getVesselTooltip,
+        onClick: (info, event) => {
+            // If no object was clicked, deselect vessel (click on empty map area)
+            if (!info.object && selectedMmsi.value) {
+                closeDetails();
+            }
+        },
     });
     map.addControl(deckOverlay);
     updateLayers();
@@ -307,11 +373,15 @@ function updateLayers() {
     if (!deckOverlay) return;
 
     const layers = [];
-    const now = Date.now();
+    const mmsi = selectedMmsi.value;
+    const tracksMap = tracks.value;
+    const clicked = clickedPoint.value;
+    const highlight = highlightPoint.value;
+    const s = settings.value;
 
     // Track layer - only show for selected vessel with history
-    if (state.selectedMmsi && state.tracks.has(state.selectedMmsi)) {
-        const trackData = getFilteredTrack(state.selectedMmsi);
+    if (mmsi && tracksMap.has(mmsi)) {
+        const trackData = getFilteredTrack(mmsi);
         if (trackData.length > 1) {
             // Track path line
             layers.push(new deck.PathLayer({
@@ -342,10 +412,10 @@ function updateLayers() {
             }));
 
             // Clicked point layer - persistent selection (renders first, below hover)
-            if (state.clickedPoint) {
+            if (clicked) {
                 layers.push(new deck.ScatterplotLayer({
                     id: 'clicked-point-layer',
-                    data: [state.clickedPoint],
+                    data: [clicked],
                     getPosition: d => [d.lon, d.lat],
                     getRadius: 16,
                     getFillColor: [255, 100, 100, 200],  // Red for clicked
@@ -356,10 +426,10 @@ function updateLayers() {
             }
 
             // Hover highlight layer - temporary highlight (renders on top)
-            if (state.highlightPoint) {
+            if (highlight) {
                 layers.push(new deck.ScatterplotLayer({
                     id: 'highlight-point-layer',
-                    data: [state.highlightPoint],
+                    data: [highlight],
                     getPosition: d => [d.lon, d.lat],
                     getRadius: 12,
                     getFillColor: [255, 170, 0, 255],  // Orange for hover
@@ -371,16 +441,15 @@ function updateLayers() {
         }
     }
 
-    // Vessel icons
-    const vesselData = Array.from(state.vessels.values())
-        .filter(v => v.lat != null && v.lon != null);
+    // Use computed filteredVessels signal - already filtered by timeline, type, and search
+    const vesselData = filteredVessels.value;
 
     layers.push(new deck.IconLayer({
         id: 'vessel-icons-layer',
         data: vesselData,
         getPosition: d => [d.lon, d.lat],
         getIcon: d => getVesselIcon(d),
-        getSize: d => d.mmsi === state.selectedMmsi ? 36 : 24,
+        getSize: d => d.mmsi === mmsi ? 36 : 24,
         getAngle: d => d.isAtoN ? 0 : -(d.heading != null && d.heading !== 511 ? d.heading : d.course || 0),
         sizeMinPixels: 14,
         sizeMaxPixels: 50,
@@ -390,6 +459,26 @@ function updateLayers() {
         },
     }));
 
+    // Vessel names layer (optional)
+    if (s.showVesselNames) {
+        layers.push(new deck.TextLayer({
+            id: 'vessel-names-layer',
+            data: vesselData.filter(v => v.shipname),
+            getPosition: d => [d.lon, d.lat],
+            getText: d => d.shipname,
+            getColor: [255, 255, 255, 200],
+            getSize: 12,
+            getTextAnchor: 'start',
+            getAlignmentBaseline: 'center',
+            getPixelOffset: [15, 0],
+            fontFamily: 'Arial, sans-serif',
+            fontWeight: 'normal',
+            background: true,
+            getBackgroundColor: [0, 0, 0, 150],
+            backgroundPadding: [2, 1],
+        }));
+    }
+
     deckOverlay.setProps({ layers });
 
     // Update highlight marker on map
@@ -397,26 +486,17 @@ function updateLayers() {
 }
 
 function isHighlighted(point) {
-    if (!state.highlightPoint) return false;
-    return point.time === state.highlightPoint.time;
+    const hp = highlightPoint.value;
+    if (!hp) return false;
+    return point.time === hp.time;
 }
 
 function getFilteredTrack(mmsi, forCharts = false) {
-    const track = state.tracks.get(mmsi) || [];
+    const track = tracks.value.get(mmsi) || [];
 
-    // Custom range from chart selection takes priority
-    if (state.historyStart != null && state.historyEnd != null) {
-        return track.filter(p => p.time >= state.historyStart && p.time <= state.historyEnd);
-    }
-
-    // For selected vessel, use history range; for unselected, show nothing
-    if (state.historyRange === 0) {
-        // Current only - return last point
-        return track.length > 0 ? [track[track.length - 1]] : [];
-    }
-
-    if (state.historyRange === -1) {
-        // All data - but for charts, filter to visible viewport
+    // For selected vessel, show full track
+    if (selectedMmsi.value === mmsi) {
+        // For charts, filter to visible viewport for performance
         if (forCharts && map) {
             return getViewportFilteredTrack(track);
         }
@@ -424,9 +504,10 @@ function getFilteredTrack(mmsi, forCharts = false) {
         return track.slice();
     }
 
-    // Time-based filter
-    const cutoff = Date.now() - state.historyRange * 1000;
-    return track.filter(p => p.time >= cutoff);
+    // For unselected vessels, filter based on timeline (using computed signals)
+    const cutoff = timelineCutoff.value;
+    const end = timelineEnd.value;
+    return track.filter(p => p.time >= cutoff && p.time <= end);
 }
 
 function getViewportFilteredTrack(track) {
@@ -459,7 +540,7 @@ function getTrackPointColor(msgType) {
 }
 
 function getVesselColor(vessel) {
-    if (vessel.mmsi === state.selectedMmsi) return '#ffc800';
+    if (vessel.mmsi === selectedMmsi.value) return '#ffc800';
     // AtoN gets distinct yellow color
     if (vessel.isAtoN) {
         if (vessel.virtual_aid) return '#ffff00';    // Virtual AtoN - bright yellow
@@ -479,7 +560,7 @@ const iconCache = new Map();
 
 function getVesselIcon(vessel) {
     const color = getVesselColor(vessel);
-    const isSelected = vessel.mmsi === state.selectedMmsi;
+    const isSelected = vessel.mmsi === selectedMmsi.value;
     const isAtoN = vessel.isAtoN;
     const cacheKey = `${color}-${isSelected}-${isAtoN ? 'aton' : 'vessel'}`;
 
@@ -539,16 +620,20 @@ function updateHighlightMarker() {
 }
 
 function zoomToFitAllVessels() {
-    const vessels = Array.from(state.vessels.values()).filter(v => v.lat && v.lon);
-    if (vessels.length === 0) return;
+    const allVessels = Array.from(vessels.value.values()).filter(v =>
+        v.lat != null && v.lon != null &&
+        v.lat >= -90 && v.lat <= 90 &&
+        v.lon >= -180 && v.lon <= 180
+    );
+    if (allVessels.length === 0) return;
 
-    if (vessels.length === 1) {
-        map.flyTo({ center: [vessels[0].lon, vessels[0].lat], zoom: 12 });
+    if (allVessels.length === 1) {
+        map.flyTo({ center: [allVessels[0].lon, allVessels[0].lat], zoom: 12 });
         return;
     }
 
     const bounds = new maplibregl.LngLatBounds();
-    vessels.forEach(v => bounds.extend([v.lon, v.lat]));
+    allVessels.forEach(v => bounds.extend([v.lon, v.lat]));
     map.fitBounds(bounds, { padding: 50, maxZoom: 14 });
 }
 
@@ -604,11 +689,16 @@ function courseFormatter(cell) {
 
 function updateVesselTable() {
     if (!vesselTable) return;
-    const data = Array.from(state.vessels.values());
+    // Use filteredVessels computed signal - already filtered by timeline, type, and search
+    const data = filteredVessels.value;
     vesselTable.replaceData(data);
-    document.getElementById('vessel-count').textContent = `${data.length} ${data.length === 1 ? 'vessel' : 'vessels'}`;
+    // Show filtered count / total count
+    const total = totalVesselCount.value;
+    const filtered = data.length;
+    document.getElementById('vessel-count').textContent = filtered === total
+        ? `${total} ${total === 1 ? 'vessel' : 'vessels'}`
+        : `${filtered}/${total} vessels`;
     updateTypeCounts();
-    applyFilters();
 }
 
 // ============================================================================
@@ -620,8 +710,10 @@ function initTypeFilters() {
         chip.addEventListener('click', () => {
             document.querySelectorAll('.type-chip').forEach(c => c.classList.remove('active'));
             chip.classList.add('active');
-            state.typeFilter = chip.dataset.type;
-            applyFilters();
+            setTypeFilter(chip.dataset.type);
+            // Signal change triggers automatic updates via effects
+            updateVesselTable();
+            updateLayers();
         });
     });
 }
@@ -648,28 +740,12 @@ function getVesselCategory(vessel) {
     return 'other';
 }
 
-function applyFilters() {
-    if (!vesselTable) return;
-    const searchTerm = document.getElementById('search-input').value.toLowerCase();
-
-    vesselTable.setFilter((data) => {
-        if (state.typeFilter !== 'all') {
-            if (getVesselCategory(data) !== state.typeFilter) return false;
-        }
-        if (searchTerm) {
-            const matches = (data.shipname?.toLowerCase().includes(searchTerm)) ||
-                           String(data.mmsi).includes(searchTerm) ||
-                           (data.callsign?.toLowerCase().includes(searchTerm)) ||
-                           (data.destination?.toLowerCase().includes(searchTerm));
-            if (!matches) return false;
-        }
-        return true;
-    });
-}
+// Note: applyFilters is no longer needed as filteredVessels computed signal handles filtering
+// Left as placeholder for backwards compatibility
 
 function updateTypeCounts() {
     const counts = { all: 0, passenger: 0, cargo: 0, tanker: 0, fishing: 0, tug: 0, aton: 0, other: 0 };
-    state.vessels.forEach(v => {
+    vessels.value.forEach(v => {
         counts.all++;
         counts[getVesselCategory(v)]++;
     });
@@ -687,10 +763,7 @@ function updateTypeCounts() {
 
 function selectVessel(mmsi) {
     console.log(`selectVessel called with mmsi=${mmsi}`);
-    state.selectedMmsi = mmsi;
-    state.selectedMessage = null;
-    state.highlightPoint = null;
-    state.clickedPoint = null;
+    selectVesselAction(mmsi);  // Use action from state.js which sets all selection state
 
     // Update URL hash for debugging
     updateUrlHash(mmsi);
@@ -734,6 +807,10 @@ async function fetchTrack(mmsi) {
 
         console.log(`Fetched ${data.positions.length} track points for vessel ${mmsi}`);
 
+        // Get vessel's draught from state (static data from Type 5 messages)
+        const vessel = vessels.value.get(mmsi);
+        const vesselDraught = vessel?.draught ?? null;
+
         // Convert positions to track point format
         const historicalTrack = data.positions.map(p => ({
             lat: p.lat,
@@ -746,10 +823,11 @@ async function fetchTrack(mmsi) {
             msgType: p.msg_type || 1,
             heading: p.heading,
             nav_status: p.nav_status,
+            draught: vesselDraught,
         }));
 
         // Get existing track (from real-time WebSocket messages)
-        const existingTrack = state.tracks.get(mmsi) || [];
+        const existingTrack = tracks.value.get(mmsi) || [];
 
         // Merge: historical data + any newer real-time points
         // Historical data comes sorted DESC, so reverse for chronological order
@@ -766,13 +844,13 @@ async function fetchTrack(mmsi) {
         // Combine: historical + newer real-time
         const mergedTrack = [...historicalTrack, ...newerPoints];
 
-        // Update state
-        state.tracks.set(mmsi, mergedTrack);
+        // Update state using action
+        setTrack(mmsi, mergedTrack);
 
         console.log(`Track for ${mmsi}: ${historicalTrack.length} historical + ${newerPoints.length} real-time = ${mergedTrack.length} total`);
 
         // Update display if this vessel is still selected
-        if (state.selectedMmsi === mmsi) {
+        if (selectedMmsi.value === mmsi) {
             onTrackDataChanged(mmsi);
         }
     } catch (err) {
@@ -781,12 +859,12 @@ async function fetchTrack(mmsi) {
 }
 
 function selectMessage(msg) {
-    state.selectedMessage = msg;
-    state.highlightPoint = msg.lat && msg.lon ? {
+    selectedMessage.value = msg;
+    setHighlightPoint(msg.lat && msg.lon ? {
         time: new Date(msg.timestamp).getTime(),
         lat: msg.lat, lon: msg.lon,
         speed: msg.speed, course: msg.course
-    } : null;
+    } : null);
 
     // Show message details panel
     const sidebarBottom = document.getElementById('sidebar-bottom');
@@ -801,13 +879,16 @@ function selectMessage(msg) {
 }
 
 function closeDetails() {
-    state.selectedMmsi = null;
-    state.selectedMessage = null;
-    state.highlightPoint = null;
-    state.clickedPoint = null;
+    deselectVessel();  // Use action from state.js which clears all selection state
     updateUrlHash(null);  // Clear URL hash
     document.getElementById('sidebar-bottom').classList.add('hidden');
     document.getElementById('charts-panel').classList.add('hidden');
+
+    // Reset timeline slider to 100 (now)
+    const slider = document.getElementById('timeline-slider');
+    slider.value = 100;
+    updateTimelineLabel();
+
     updateLayers();
 }
 
@@ -837,12 +918,13 @@ function formatETA(v) {
 
 function updateVesselDetails() {
     const container = document.getElementById('vessel-details');
-    if (!state.selectedMmsi || !state.vessels.has(state.selectedMmsi)) {
+    const mmsi = selectedMmsi.value;
+    if (!mmsi || !vessels.value.has(mmsi)) {
         container.innerHTML = '<p class="no-selection">Select a vessel</p>';
         return;
     }
 
-    const v = state.vessels.get(state.selectedMmsi);
+    const v = vessels.value.get(mmsi);
 
     // AtoN (Aid-to-Navigation) details
     if (v.isAtoN) {
@@ -973,12 +1055,11 @@ function getMessageTypeName(type) {
 
 function updateMessageDetails() {
     const container = document.getElementById('message-details');
-    if (!state.selectedMessage) {
+    const msg = selectedMessage.value;
+    if (!msg) {
         container.innerHTML = '';
         return;
     }
-
-    const msg = state.selectedMessage;
     const fields = Object.entries(msg)
         .filter(([k]) => !['raw_nmea'].includes(k))
         .map(([k, v]) => {
@@ -1003,7 +1084,7 @@ function formatValue(v) {
 function selectTrackPointMessage(trackPoint) {
     // Find message with matching timestamp and coordinates
     const targetTime = trackPoint.time;
-    const msg = state.messages.find(m => {
+    const msg = messages.value.find(m => {
         const msgTime = new Date(m.timestamp).getTime();
         return Math.abs(msgTime - targetTime) < 1000 && // Within 1 second
                m.lat != null && m.lon != null;
@@ -1023,12 +1104,13 @@ function selectTrackPointMessage(trackPoint) {
 function onPointHover(point, source) {
     if (!point) {
         // Mouse left - clear hover highlight
-        state.highlightPoint = null;
+        setHighlightPoint(null);
 
         // If there's a clicked point, show its info; otherwise hide info
-        if (state.clickedPoint) {
+        const clicked = clickedPoint.value;
+        if (clicked) {
             updateLayers();  // Will show clickedPoint layer
-            showHighlightInfo(state.clickedPoint);
+            showHighlightInfo(clicked);
         } else {
             updateLayers();
             showHighlightInfo(null);
@@ -1036,7 +1118,7 @@ function onPointHover(point, source) {
         return;
     }
 
-    state.highlightPoint = point;
+    setHighlightPoint(point);
     updateLayers();
     showHighlightInfo(point);
 
@@ -1051,18 +1133,16 @@ function onPointHover(point, source) {
 function onPointClick(point) {
     if (!point) return;
 
-    state.clickedPoint = point;
-    state.highlightPoint = point;
+    setClickedPoint(point);
+    setHighlightPoint(point);
     updateLayers();
     showHighlightInfo(point);
     syncChartsToPoint(point);
     selectTrackPointMessage(point);
 }
 
-// Legacy function for compatibility
-function setHighlightPoint(point) {
-    onPointClick(point);
-}
+// Note: setHighlightPoint is now imported from state.js
+// Legacy wrapper removed to avoid conflict
 
 function showHighlightInfo(point) {
     const info = document.getElementById('highlight-info');
@@ -1086,14 +1166,15 @@ let draughtChart = null;
 
 function updateCharts() {
     const chartsPanel = document.getElementById('charts-panel');
+    const mmsi = selectedMmsi.value;
 
-    if (!state.selectedMmsi || !state.tracks.has(state.selectedMmsi)) {
+    if (!mmsi || !tracks.value.has(mmsi)) {
         chartsPanel.classList.add('hidden');
         return;
     }
 
     // Use viewport-filtered track for charts (forCharts=true)
-    const track = getFilteredTrack(state.selectedMmsi, true);
+    const track = getFilteredTrack(mmsi, true);
     if (track.length < 2) {
         chartsPanel.classList.add('hidden');
         return;
@@ -1202,9 +1283,10 @@ function updateCharts() {
 // Handle click on chart to select a point
 function handleChartClick(u) {
     const idx = u.cursor.idx;
-    if (idx == null || !state.selectedMmsi) return;
+    const mmsi = selectedMmsi.value;
+    if (idx == null || !mmsi) return;
 
-    const track = getFilteredTrack(state.selectedMmsi, true);
+    const track = getFilteredTrack(mmsi, true);
     if (idx >= 0 && idx < track.length) {
         onPointClick(track[idx]);
     }
@@ -1212,55 +1294,34 @@ function handleChartClick(u) {
 
 function handleChartSelect(u) {
     const selection = u.select;
+    const mmsi = selectedMmsi.value;
 
-    // Detect click vs drag selection
+    // Handle click - select the point at cursor position
     if (selection.width < 10) {
-        // This is a click - select the point at cursor position
         const idx = u.cursor.idx;
-        if (idx != null && state.selectedMmsi) {
-            const track = getFilteredTrack(state.selectedMmsi, true);
+        if (idx != null && mmsi) {
+            const track = getFilteredTrack(mmsi, true);
             if (idx >= 0 && idx < track.length) {
                 onPointClick(track[idx]);
             }
         }
-        return;
     }
-
-    const xMin = u.posToVal(selection.left, 'x');
-    const xMax = u.posToVal(selection.left + selection.width, 'x');
-
-    // Convert from seconds to milliseconds
-    state.historyStart = xMin * 1000;
-    state.historyEnd = xMax * 1000;
-
-    // Update the dropdown to show "Custom"
-    const historySelect = document.getElementById('history-range');
-    if (!historySelect.querySelector('option[value="custom"]')) {
-        const opt = document.createElement('option');
-        opt.value = 'custom';
-        opt.textContent = 'Custom range';
-        historySelect.appendChild(opt);
-    }
-    historySelect.value = 'custom';
 
     // Clear the selection rectangle
     u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false);
-
-    // Refresh display
-    updateLayers();
-    updateHistoryInfo();
 }
 
 function syncCursor(u) {
     const idx = u.cursor.idx;
-    if (idx == null || !state.selectedMmsi) {
+    const mmsi = selectedMmsi.value;
+    if (idx == null || !mmsi) {
         // Cursor left chart - use unified hover handler to clear
         onPointHover(null, 'chart');
         return;
     }
 
     // Use the same viewport-filtered track as the charts
-    const track = getFilteredTrack(state.selectedMmsi, true);
+    const track = getFilteredTrack(mmsi, true);
     if (idx >= 0 && idx < track.length) {
         const point = track[idx];
         // Use unified hover handler
@@ -1269,12 +1330,13 @@ function syncCursor(u) {
 }
 
 function syncChartsToPoint(point) {
-    if (!speedChart || !courseChart || !state.selectedMmsi) {
+    const mmsi = selectedMmsi.value;
+    if (!speedChart || !courseChart || !mmsi) {
         return;
     }
 
     // Use the same viewport-filtered track as the charts
-    const track = getFilteredTrack(state.selectedMmsi, true);
+    const track = getFilteredTrack(mmsi, true);
     const idx = track.findIndex(p => p.time === point.time);
 
     if (idx >= 0) {
@@ -1295,52 +1357,127 @@ function syncChartsToPoint(point) {
 }
 
 // ============================================================================
-// Global History Control
+// Global Timeline Slider
 // ============================================================================
 
-function initHistoryControl() {
-    const select = document.getElementById('history-range');
-    select.value = state.historyRange;
+async function fetchTimeRange() {
+    try {
+        const response = await fetch('/api/timerange');
+        const data = await response.json();
+        if (data.oldest && data.newest) {
+            setTimelineRange(
+                new Date(data.oldest).getTime(),
+                new Date(data.newest).getTime()
+            );
+            console.log(`Timeline range: ${data.oldest} to ${data.newest}`);
+        }
+    } catch (e) {
+        console.warn('Failed to fetch time range:', e);
+    }
+}
 
-    select.addEventListener('change', (e) => {
-        const val = e.target.value;
-        if (val === 'custom') return; // Don't do anything if custom is selected directly
+function initTimelineSlider() {
+    const slider = document.getElementById('timeline-slider');
+    const label = document.getElementById('timeline-label');
 
-        // Clear custom range when selecting a standard option
-        state.historyStart = null;
-        state.historyEnd = null;
-        state.historyRange = parseInt(val);
+    // Fetch time range from backend
+    fetchTimeRange();
 
-        // Remove custom option if it exists
-        const customOpt = select.querySelector('option[value="custom"]');
-        if (customOpt) customOpt.remove();
+    slider.addEventListener('input', (e) => {
+        setTimelinePosition(parseInt(e.target.value, 10));
 
-        // User action - immediate update
-        updateLayers();
-        forceChartUpdate();
-        updateHistoryInfo();
+        // Different behavior based on whether a vessel is selected
+        if (selectedMmsi.value) {
+            // Vessel mode: scrub through vessel's track
+            updateVesselTimelineMarker();
+        } else {
+            // Global mode: filter visible vessels - signals handle value updates
+            updateVesselTable();  // Refresh table with new filtered data
+            updateLayers();
+        }
+        updateTimelineLabel();
     });
 
-    updateHistoryInfo();
+    // Double-click to reset to now/end
+    slider.addEventListener('dblclick', () => {
+        slider.value = 100;
+        setTimelinePosition(100);
+        setHighlightPoint(null);
+        updateTimelineLabel();
+        updateVesselTable();
+        updateLayers();
+    });
+
+    updateTimelineLabel();
 }
 
-function updateHistoryInfo() {
-    const info = document.getElementById('history-info');
-    if (!state.selectedMmsi) {
-        info.textContent = '';
+function updateVesselTimelineMarker() {
+    const mmsi = selectedMmsi.value;
+    if (!mmsi) return;
+
+    const track = tracks.value.get(mmsi) || [];
+    if (track.length === 0) return;
+
+    // Map slider position (0-100) to track index
+    const pos = timelinePosition.value;
+    const idx = Math.min(
+        Math.floor((pos / 100) * track.length),
+        track.length - 1
+    );
+
+    const point = track[idx];
+    if (point) {
+        setHighlightPoint(point);
+        updateHighlightMarker();
+        updateLayers();
+    }
+}
+
+// Note: updateTimelineValue is no longer needed - timelineValue is a computed signal
+
+function updateTimelineLabel() {
+    const label = document.getElementById('timeline-label');
+    const hp = highlightPoint.value;
+    const mmsi = selectedMmsi.value;
+    const pos = timelinePosition.value;
+    const tv = timelineValue.value;
+
+    // Vessel mode: show timestamp from track
+    if (mmsi && hp) {
+        const date = new Date(hp.time);
+        const now = new Date();
+
+        // If same day, show time only
+        if (date.toDateString() === now.toDateString()) {
+            label.textContent = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        } else {
+            label.textContent = date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+                ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
         return;
     }
-    const track = state.tracks.get(state.selectedMmsi) || [];
-    const filtered = getFilteredTrack(state.selectedMmsi);
 
-    if (state.historyStart != null && state.historyEnd != null) {
-        const start = new Date(state.historyStart).toLocaleTimeString();
-        const end = new Date(state.historyEnd).toLocaleTimeString();
-        info.textContent = `${start} - ${end} (${filtered.length} pts)`;
+    // Global mode: show timeline position
+    if (pos >= 100 || !tv) {
+        label.textContent = 'Now';
+        return;
+    }
+
+    const date = new Date(tv);
+    const now = new Date();
+
+    // If same day, show time only
+    if (date.toDateString() === now.toDateString()) {
+        label.textContent = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     } else {
-        info.textContent = `${filtered.length}/${track.length} pts`;
+        // Show date and time
+        label.textContent = date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+            ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 }
+
+// Note: getTimelineCutoff and getTimelineEnd are now computed signals
+// Use timelineCutoff.value and timelineEnd.value instead
 
 // ============================================================================
 // Geolocation
@@ -1518,7 +1655,12 @@ function initCloseDetails() {
 // ============================================================================
 
 function initSearch() {
-    document.getElementById('search-input').addEventListener('input', applyFilters);
+    document.getElementById('search-input').addEventListener('input', (e) => {
+        setSearchText(e.target.value);
+        // Signal change triggers filteredVessels to recompute
+        updateVesselTable();
+        updateLayers();
+    });
 }
 
 // ============================================================================
@@ -1562,14 +1704,14 @@ function initMessageTable() {
         selectMessage(msg);
         // Also select the vessel if it has a position
         if (msg.mmsi && (msg.lat || msg.lon)) {
-            state.selectedMmsi = msg.mmsi;
+            selectVesselAction(msg.mmsi);
         }
     });
 }
 
 function updateMessageTable() {
     if (!messageTable) return;
-    const displayData = state.messages.slice(0, 200).map(m => ({
+    const displayData = messages.value.slice(0, 200).map(m => ({
         ...m,
         time: new Date(m.timestamp || Date.now()).toLocaleTimeString(),
     }));
@@ -1582,10 +1724,10 @@ function updateMessageTable() {
 
 function initStyleSelector() {
     const selector = document.getElementById('style-selector');
-    selector.value = state.mapStyle;
+    selector.value = mapStyle.value;
     selector.addEventListener('change', (e) => {
-        state.mapStyle = e.target.value;
-        map.setStyle(MAP_STYLES[state.mapStyle]);
+        setMapStyle(e.target.value);
+        map.setStyle(MAP_STYLES[e.target.value]);
     });
 }
 
@@ -1609,13 +1751,13 @@ function connectWebSocket() {
 
     ws.onopen = () => {
         console.log('WebSocket connected');
-        state.connected = true;
+        setConnected(true);
         updateConnectionStatus();
     };
 
     ws.onclose = (event) => {
         console.log('WebSocket closed:', event.code, event.reason);
-        state.connected = false;
+        setConnected(false);
         updateConnectionStatus();
         setTimeout(connectWebSocket, 2000);
     };
@@ -1630,18 +1772,21 @@ function connectWebSocket() {
             // Handle batch history message
             if (msg.type === 'history_batch' && msg.messages) {
                 console.log(`Processing ${msg.messages.length} historical messages`);
-                for (const m of msg.messages) {
-                    handleMessage(m, true); // true = batch mode, skip UI updates
-                }
+                // Use batchUpdate for efficient bulk updates
+                batchUpdate(() => {
+                    for (const m of msg.messages) {
+                        handleMessage(m, true); // true = batch mode, skip UI updates
+                    }
+                });
                 // Single UI update after all messages processed
-                document.getElementById('message-count').textContent = `${state.messageCount} messages`;
+                document.getElementById('message-count').textContent = `${messageCount.value} messages`;
                 updateVesselTable();
                 updateMessageTable();
                 updateLayers();
 
                 // Zoom to fit all vessels after history load (unless URL has specific vessel)
-                if (!state.mapInitialized && state.vessels.size > 0) {
-                    state.mapInitialized = true;
+                if (!mapInitialized.value && vessels.value.size > 0) {
+                    setMapInitialized(true);
                     // Don't zoom to all if URL hash specifies a vessel
                     if (!parseUrlHash()) {
                         setTimeout(zoomToFitAllVessels, 100);
@@ -1660,8 +1805,9 @@ function connectWebSocket() {
 
 function updateConnectionStatus() {
     const el = document.getElementById('connection-status');
-    el.className = state.connected ? 'connected' : 'disconnected';
-    el.querySelector('.status-text').textContent = state.connected ? 'Connected' : 'Disconnected';
+    const isConnected = connected.value;
+    el.className = isConnected ? 'connected' : 'disconnected';
+    el.querySelector('.status-text').textContent = isConnected ? 'Connected' : 'Disconnected';
 }
 
 // ============================================================================
@@ -1669,117 +1815,143 @@ function updateConnectionStatus() {
 // ============================================================================
 
 function handleMessage(msg, batchMode = false) {
-    state.messageCount++;
-
-    // Store message
-    state.messages.unshift(msg);
-    if (state.messages.length > MAX_MESSAGES) state.messages.pop();
+    // Store message using action
+    addMessage(msg);
 
     const mmsi = msg.mmsi;
     if (!mmsi) return;
 
-    // Get or create vessel
-    let vessel = state.vessels.get(mmsi);
-    if (!vessel) {
-        vessel = { mmsi };
-        state.vessels.set(mmsi, vessel);
-    }
-
     const msgType = msg.msg_type;
 
+    // Build vessel update data object
+    const vesselUpdate = { mmsi };
+
     // Always extract static vessel data if present (handles enriched messages from backend)
-    if (msg.shipname) vessel.shipname = msg.shipname.trim();
-    if (msg.callsign) vessel.callsign = msg.callsign.trim();
-    if (msg.imo) vessel.imo = msg.imo;
-    if (msg.ship_type != null) vessel.ship_type = msg.ship_type;
-    if (msg.destination) vessel.destination = msg.destination.trim();
-    if (msg.to_bow != null) vessel.to_bow = msg.to_bow;
-    if (msg.to_stern != null) vessel.to_stern = msg.to_stern;
-    if (msg.to_port != null) vessel.to_port = msg.to_port;
-    if (msg.to_starboard != null) vessel.to_starboard = msg.to_starboard;
+    if (msg.shipname) vesselUpdate.shipname = msg.shipname.trim();
+    if (msg.callsign) vesselUpdate.callsign = msg.callsign.trim();
+    if (msg.imo) vesselUpdate.imo = msg.imo;
+    if (msg.ship_type != null) vesselUpdate.ship_type = msg.ship_type;
+    if (msg.destination) vesselUpdate.destination = msg.destination.trim();
+    if (msg.to_bow != null) vesselUpdate.to_bow = msg.to_bow;
+    if (msg.to_stern != null) vesselUpdate.to_stern = msg.to_stern;
+    if (msg.to_port != null) vesselUpdate.to_port = msg.to_port;
+    if (msg.to_starboard != null) vesselUpdate.to_starboard = msg.to_starboard;
     // Backend sends nav_status, frontend uses status
-    if (msg.nav_status != null) vessel.status = msg.nav_status;
+    if (msg.nav_status != null) vesselUpdate.status = msg.nav_status;
+    // Draught and ETA from enriched messages (backend sends eta_month, etc.)
+    if (msg.draught != null) vesselUpdate.draught = msg.draught;
+    if (msg.eta_month != null) vesselUpdate.eta_month = msg.eta_month;
+    if (msg.eta_day != null) vesselUpdate.eta_day = msg.eta_day;
+    if (msg.eta_hour != null) vesselUpdate.eta_hour = msg.eta_hour;
+    if (msg.eta_minute != null) vesselUpdate.eta_minute = msg.eta_minute;
+
+    let hasPosition = false;
 
     // Position reports (1, 2, 3)
     if ([1, 2, 3].includes(msgType)) {
         if (msg.lat != null && msg.lon != null && msg.lat !== 91 && msg.lon !== 181) {
-            vessel.lat = msg.lat;
-            vessel.lon = msg.lon;
-            addTrackPoint(mmsi, msg.lat, msg.lon, msg.speed, msg.course, msg.timestamp, msgType);
+            vesselUpdate.lat = msg.lat;
+            vesselUpdate.lon = msg.lon;
+            hasPosition = true;
         }
-        if (msg.speed != null) vessel.speed = msg.speed;
-        if (msg.course != null) vessel.course = msg.course;
-        if (msg.heading != null) vessel.heading = msg.heading;
-        if (msg.status != null) vessel.status = msg.status;
-        vessel.lastUpdate = msg.timestamp || new Date().toISOString();
+        if (msg.speed != null) vesselUpdate.speed = msg.speed;
+        if (msg.course != null) vesselUpdate.course = msg.course;
+        if (msg.heading != null) vesselUpdate.heading = msg.heading;
+        if (msg.status != null) vesselUpdate.status = msg.status;
+        vesselUpdate.lastUpdate = msg.timestamp || new Date().toISOString();
     }
 
     // Static data (5)
     if (msgType === 5) {
-        if (msg.shipname) vessel.shipname = msg.shipname.trim();
-        if (msg.callsign) vessel.callsign = msg.callsign.trim();
-        if (msg.imo) vessel.imo = msg.imo;
-        if (msg.ship_type != null) vessel.ship_type = msg.ship_type;
-        if (msg.destination) vessel.destination = msg.destination.trim();
-        if (msg.to_bow != null) vessel.to_bow = msg.to_bow;
-        if (msg.to_stern != null) vessel.to_stern = msg.to_stern;
-        if (msg.to_port != null) vessel.to_port = msg.to_port;
-        if (msg.to_starboard != null) vessel.to_starboard = msg.to_starboard;
-        if (msg.draught != null) vessel.draught = msg.draught;
+        if (msg.shipname) vesselUpdate.shipname = msg.shipname.trim();
+        if (msg.callsign) vesselUpdate.callsign = msg.callsign.trim();
+        if (msg.imo) vesselUpdate.imo = msg.imo;
+        if (msg.ship_type != null) vesselUpdate.ship_type = msg.ship_type;
+        if (msg.destination) vesselUpdate.destination = msg.destination.trim();
+        if (msg.to_bow != null) vesselUpdate.to_bow = msg.to_bow;
+        if (msg.to_stern != null) vesselUpdate.to_stern = msg.to_stern;
+        if (msg.to_port != null) vesselUpdate.to_port = msg.to_port;
+        if (msg.to_starboard != null) vesselUpdate.to_starboard = msg.to_starboard;
+        if (msg.draught != null) vesselUpdate.draught = msg.draught;
         // ETA from AIS (month, day, hour, minute in UTC)
         if (msg.month != null && msg.day != null) {
-            vessel.eta_month = msg.month;
-            vessel.eta_day = msg.day;
-            vessel.eta_hour = msg.hour || 0;
-            vessel.eta_minute = msg.minute || 0;
+            vesselUpdate.eta_month = msg.month;
+            vesselUpdate.eta_day = msg.day;
+            vesselUpdate.eta_hour = msg.hour || 0;
+            vesselUpdate.eta_minute = msg.minute || 0;
         }
     }
 
     // Class B (18, 19)
     if ([18, 19].includes(msgType)) {
         if (msg.lat != null && msg.lon != null && msg.lat !== 91 && msg.lon !== 181) {
-            vessel.lat = msg.lat;
-            vessel.lon = msg.lon;
-            addTrackPoint(mmsi, msg.lat, msg.lon, msg.speed, msg.course, msg.timestamp, msgType);
+            vesselUpdate.lat = msg.lat;
+            vesselUpdate.lon = msg.lon;
+            hasPosition = true;
         }
-        if (msg.speed != null) vessel.speed = msg.speed;
-        if (msg.course != null) vessel.course = msg.course;
-        if (msg.heading != null) vessel.heading = msg.heading;
-        vessel.lastUpdate = msg.timestamp || new Date().toISOString();
-        if (msgType === 19 && msg.shipname) vessel.shipname = msg.shipname.trim();
+        if (msg.speed != null) vesselUpdate.speed = msg.speed;
+        if (msg.course != null) vesselUpdate.course = msg.course;
+        if (msg.heading != null) vesselUpdate.heading = msg.heading;
+        vesselUpdate.lastUpdate = msg.timestamp || new Date().toISOString();
+        if (msgType === 19 && msg.shipname) vesselUpdate.shipname = msg.shipname.trim();
     }
 
     // Class B static (24)
     if (msgType === 24) {
-        if (msg.shipname) vessel.shipname = msg.shipname.trim();
-        if (msg.callsign) vessel.callsign = msg.callsign.trim();
-        if (msg.ship_type != null) vessel.ship_type = msg.ship_type;
+        if (msg.shipname) vesselUpdate.shipname = msg.shipname.trim();
+        if (msg.callsign) vesselUpdate.callsign = msg.callsign.trim();
+        if (msg.ship_type != null) vesselUpdate.ship_type = msg.ship_type;
     }
 
     // Aid-to-Navigation (21)
     if (msgType === 21) {
-        vessel.isAtoN = true;
-        if (msg.name) vessel.shipname = msg.name.trim();
-        if (msg.name_ext) vessel.shipname = (vessel.shipname || '') + msg.name_ext.trim();
-        if (msg.aid_type != null) vessel.aid_type = msg.aid_type;
-        if (msg.lat != null && msg.lon != null && msg.lat !== 91 && msg.lon !== 181) {
-            vessel.lat = msg.lat;
-            vessel.lon = msg.lon;
+        vesselUpdate.isAtoN = true;
+        if (msg.name) vesselUpdate.shipname = msg.name.trim();
+        if (msg.name_ext) {
+            const existing = vessels.value.get(mmsi);
+            vesselUpdate.shipname = (existing?.shipname || '') + msg.name_ext.trim();
         }
-        if (msg.virtual_aid != null) vessel.virtual_aid = msg.virtual_aid;
-        if (msg.off_position != null) vessel.off_position = msg.off_position;
-        if (msg.to_bow != null) vessel.to_bow = msg.to_bow;
-        if (msg.to_stern != null) vessel.to_stern = msg.to_stern;
-        if (msg.to_port != null) vessel.to_port = msg.to_port;
-        if (msg.to_starboard != null) vessel.to_starboard = msg.to_starboard;
-        vessel.lastUpdate = msg.timestamp || new Date().toISOString();
+        if (msg.aid_type != null) vesselUpdate.aid_type = msg.aid_type;
+        if (msg.lat != null && msg.lon != null && msg.lat !== 91 && msg.lon !== 181) {
+            vesselUpdate.lat = msg.lat;
+            vesselUpdate.lon = msg.lon;
+        }
+        if (msg.virtual_aid != null) vesselUpdate.virtual_aid = msg.virtual_aid;
+        if (msg.off_position != null) vesselUpdate.off_position = msg.off_position;
+        if (msg.to_bow != null) vesselUpdate.to_bow = msg.to_bow;
+        if (msg.to_stern != null) vesselUpdate.to_stern = msg.to_stern;
+        if (msg.to_port != null) vesselUpdate.to_port = msg.to_port;
+        if (msg.to_starboard != null) vesselUpdate.to_starboard = msg.to_starboard;
+        vesselUpdate.lastUpdate = msg.timestamp || new Date().toISOString();
+    }
+
+    // Update vessel using signal action
+    updateVessel(mmsi, vesselUpdate);
+
+    // Add track point if we have a position
+    if (hasPosition) {
+        const time = msg.timestamp ? new Date(msg.timestamp).getTime() : Date.now();
+        const vessel = vessels.value.get(mmsi);
+        const draught = vessel?.draught ?? null;
+
+        addTrackPoint(mmsi, {
+            lat: msg.lat,
+            lon: msg.lon,
+            time,
+            timestamp: msg.timestamp || new Date().toISOString(),
+            speed: msg.speed,
+            course: msg.course,
+            mmsi,
+            msgType: msgType || 1,
+            draught,
+        });
     }
 
     // Skip UI updates in batch mode
     if (batchMode) return;
 
     // Update UI through unified system
-    document.getElementById('message-count').textContent = `${state.messageCount} messages`;
+    document.getElementById('message-count').textContent = `${messageCount.value} messages`;
     updateMessageTable();
 
     // Use unified update functions for consistent data flow
@@ -1787,33 +1959,16 @@ function handleMessage(msg, batchMode = false) {
     onTrackDataChanged(mmsi);
 
     // Zoom to fit all vessels on first data
-    if (!state.mapInitialized && state.vessels.size > 0) {
-        state.mapInitialized = true;
+    if (!mapInitialized.value && vessels.value.size > 0) {
+        setMapInitialized(true);
         setTimeout(zoomToFitAllVessels, 500);
     }
 }
 
-function addTrackPoint(mmsi, lat, lon, speed, course, timestamp, msgType) {
-    if (!state.tracks.has(mmsi)) {
-        state.tracks.set(mmsi, []);
-    }
-    const track = state.tracks.get(mmsi);
+// Local helper removed - now using addTrackPoint action from state.js that takes (mmsi, point)
+// The action expects: addTrackPoint(mmsi, { lat, lon, time, timestamp, speed, course, mmsi, msgType, draught })
 
-    // Use actual message timestamp, not current time
-    const time = timestamp ? new Date(timestamp).getTime() : Date.now();
-
-    // Get current draught from vessel data (Type 5 messages update this separately)
-    const vessel = state.vessels.get(mmsi);
-    const draught = vessel?.draught ?? null;
-
-    track.push({
-        lat, lon, time,
-        timestamp: timestamp || new Date().toISOString(),
-        speed, course, mmsi, msgType: msgType || 1,
-        draught,
-    });
-    if (track.length > MAX_TRACK_POINTS) track.shift();
-}
+// Note: addTrackPoint is now imported from state.js and handles track point limits internally
 
 // ============================================================================
 // URL Hash Navigation (for debugging)
@@ -1841,7 +1996,7 @@ function updateUrlHash(mmsi) {
 
 function selectVesselFromHash() {
     const mmsi = parseUrlHash();
-    if (mmsi && state.vessels.has(mmsi)) {
+    if (mmsi && vessels.value.has(mmsi)) {
         console.log(`Selecting vessel from URL hash: ${mmsi}`);
         selectVessel(mmsi);
         zoomToVessel(mmsi);
@@ -1849,7 +2004,7 @@ function selectVesselFromHash() {
         console.log(`Vessel ${mmsi} from URL hash not found yet, will retry...`);
         // Retry after a short delay (data might still be loading)
         setTimeout(() => {
-            if (state.vessels.has(mmsi)) {
+            if (vessels.value.has(mmsi)) {
                 console.log(`Selecting vessel from URL hash (retry): ${mmsi}`);
                 selectVessel(mmsi);
                 zoomToVessel(mmsi);
@@ -1859,8 +2014,10 @@ function selectVesselFromHash() {
 }
 
 function zoomToVessel(mmsi) {
-    const vessel = state.vessels.get(mmsi);
-    if (vessel && vessel.lat != null && vessel.lon != null) {
+    const vessel = vessels.value.get(mmsi);
+    if (vessel && vessel.lat != null && vessel.lon != null &&
+        vessel.lat >= -90 && vessel.lat <= 90 &&
+        vessel.lon >= -180 && vessel.lon <= 180) {
         map.flyTo({ center: [vessel.lon, vessel.lat], zoom: 12 });
     }
 }
@@ -1868,10 +2025,27 @@ function zoomToVessel(mmsi) {
 // Listen for hash changes
 window.addEventListener('hashchange', () => {
     const mmsi = parseUrlHash();
-    if (mmsi && state.vessels.has(mmsi)) {
+    if (mmsi && vessels.value.has(mmsi)) {
         selectVessel(mmsi);
     }
 });
+
+// ============================================================================
+// Reactive Effects (automatic UI updates when signals change)
+// ============================================================================
+
+function initEffects() {
+    // Effect: Update settings UI when settings signal changes
+    registerEffect(() => {
+        const s = settings.value;
+        applySettings();
+    });
+
+    // Note: For now, we trigger updates manually when needed.
+    // True reactive effects would use registerEffect to automatically
+    // call updateVesselTable/updateLayers when signals change.
+    // This can be enhanced incrementally.
+}
 
 // ============================================================================
 // Initialize
@@ -1880,6 +2054,8 @@ window.addEventListener('hashchange', () => {
 document.addEventListener('DOMContentLoaded', () => {
     try {
         console.log('Initializing AIS Tracker...');
+        initSettings();
+        console.log('Settings initialized');
         initMap();
         console.log('Map initialized');
         initVesselTable();
@@ -1890,11 +2066,12 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('List tabs initialized');
         initTypeFilters();
         initSearch();
-        initHistoryControl();
+        initTimelineSlider();
         initStyleSelector();
         initGeolocation();
         initResizeHandlers();
         initCloseDetails();
+        initEffects();
         console.log('All UI initialized, connecting WebSocket...');
         connectWebSocket();
 

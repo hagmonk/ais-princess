@@ -206,6 +206,7 @@ def status():
 
     print(f"\nCommands:")
     print(f"  Attach:          tmux attach -t {SESSION_NAME}")
+    print(f"  Restart all:     uv run ais-tmux --restart-all")
     print(f"  Restart web:     uv run ais-tmux --restart-web")
     print(f"  Restart decoder: uv run ais-tmux --restart-decoder")
     print(f"  Restart capture: uv run ais-tmux --restart-capture")
@@ -230,6 +231,7 @@ Examples:
   ais-tmux                    Start all services
   ais-tmux --force            Recreate session (kills existing)
   ais-tmux --status           Show current status
+  ais-tmux --restart-all      Restart all services
   ais-tmux --restart-web      Restart web server
   ais-tmux --restart-decoder  Restart decoder
   ais-tmux --restart-capture  Restart AIS capture
@@ -251,6 +253,11 @@ Examples:
         "--restart-capture",
         action="store_true",
         help="Restart the AIS capture pane"
+    )
+    parser.add_argument(
+        "--restart-all",
+        action="store_true",
+        help="Restart all services"
     )
     parser.add_argument(
         "--stop",
@@ -301,6 +308,11 @@ Examples:
         status()
     elif args.stop:
         stop_services()
+    elif args.restart_all:
+        restart_pane(PANE_WEB, args.web_cmd, project_dir)
+        restart_pane(PANE_DECODER, args.decoder_cmd, project_dir)
+        restart_pane(PANE_CAPTURE, args.capture_cmd, project_dir)
+        print("Restarted all services.")
     elif args.restart_web:
         restart_pane(PANE_WEB, args.web_cmd, project_dir)
     elif args.restart_decoder:
