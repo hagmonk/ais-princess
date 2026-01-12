@@ -610,6 +610,43 @@ html, body {
     color: var(--text-primary);
 }
 
+/* Port visits list */
+.port-visits-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.port-visit-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.port-visit-item:last-child {
+    border-bottom: none;
+}
+
+.port-visit-date {
+    color: var(--text-secondary);
+    min-width: 50px;
+    font-size: 11px;
+}
+
+.port-visit-name {
+    flex: 1;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.port-visit-duration {
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
 /* Message details */
 #message-details {
     font-size: 11px;

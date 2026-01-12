@@ -226,6 +226,239 @@ async def resolve_destination(db: aiosqlite.Connection, destination: str) -> dic
     return result
 
 
+# ============================================================================
+# Port Visit Detection
+# ============================================================================
+
+# Detection parameters
+MIN_STOP_HOURS = 1.0      # Minimum duration to count as port visit
+MAX_SPEED_KNOTS = 0.5     # Speed threshold for "stationary"
+GAP_HOURS = 1.0           # Time gap to start new stop cluster
+MAX_PORT_DISTANCE_KM = 5  # Maximum distance to match to a port
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate approximate distance in km."""
+    import math
+    lat_diff = lat2 - lat1
+    lon_diff = (lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2))
+    return 111.12 * math.sqrt(lat_diff * lat_diff + lon_diff * lon_diff)
+
+
+async def detect_port_visits(db: aiosqlite.Connection, mmsi: int) -> list[dict]:
+    """Detect port visits from track data by analyzing stationary periods."""
+
+    gap_days = GAP_HOURS / 24.0
+
+    # Query to find stops using window functions
+    query = """
+    WITH stationary_points AS (
+        SELECT
+            timestamp,
+            lat, lon, speed,
+            julianday(timestamp) - lag(julianday(timestamp)) OVER (ORDER BY timestamp) as gap_days
+        FROM positions
+        WHERE mmsi = ? AND speed < ?
+    ),
+    stop_starts AS (
+        SELECT
+            timestamp, lat, lon,
+            CASE WHEN gap_days > ? OR gap_days IS NULL THEN 1 ELSE 0 END as new_stop
+        FROM stationary_points
+    ),
+    stop_groups AS (
+        SELECT
+            timestamp, lat, lon,
+            SUM(new_stop) OVER (ORDER BY timestamp) as stop_id
+        FROM stop_starts
+    )
+    SELECT
+        stop_id,
+        COUNT(*) as points,
+        AVG(lat) as lat,
+        AVG(lon) as lon,
+        MIN(timestamp) as arrival,
+        MAX(timestamp) as departure,
+        (julianday(MAX(timestamp)) - julianday(MIN(timestamp))) * 24 as hours
+    FROM stop_groups
+    GROUP BY stop_id
+    HAVING hours >= ?
+    ORDER BY arrival DESC
+    LIMIT 10
+    """
+
+    async with db.execute(query, (mmsi, MAX_SPEED_KNOTS, gap_days, MIN_STOP_HOURS)) as cursor:
+        stops = await cursor.fetchall()
+
+    visits = []
+    for stop in stops:
+        stop_lat, stop_lon = stop[2], stop[3]
+
+        # Find nearest port
+        port = await match_stop_to_port(db, stop_lat, stop_lon)
+
+        if port:
+            visits.append({
+                "locode": port["locode"],
+                "name": port["name"],
+                "country": port.get("country"),
+                "region": port.get("region"),
+                "lat": port["lat"],
+                "lon": port["lon"],
+                "arrival": stop[4],
+                "departure": stop[5],
+                "duration_hours": round(stop[6], 1),
+                "distance_km": port["distance_km"]
+            })
+
+    return visits
+
+
+async def detect_voyage_segments(db: aiosqlite.Connection, mmsi: int) -> list[dict]:
+    """Detect voyage segments by grouping track points with the same destination."""
+
+    # Get all positions with destination info
+    query = """
+    SELECT
+        p.timestamp, p.lat, p.lon, p.speed, p.course,
+        v.destination
+    FROM positions p
+    LEFT JOIN vessels v ON p.mmsi = v.mmsi
+    WHERE p.mmsi = ?
+    ORDER BY p.timestamp
+    """
+
+    async with db.execute(query, (mmsi,)) as cursor:
+        rows = await cursor.fetchall()
+
+    if not rows:
+        return []
+
+    # Group consecutive positions by destination
+    segments = []
+    current_dest = None
+    current_segment = []
+
+    for row in rows:
+        timestamp, lat, lon, speed, course, dest = row
+        dest = dest.strip() if dest else None
+
+        if dest != current_dest:
+            # Save previous segment if it exists
+            if current_segment and current_dest:
+                segments.append({
+                    "destination": current_dest,
+                    "points": current_segment
+                })
+            # Start new segment
+            current_dest = dest
+            current_segment = []
+
+        current_segment.append({
+            "timestamp": timestamp,
+            "lat": lat,
+            "lon": lon,
+            "speed": speed,
+            "course": course
+        })
+
+    # Don't forget last segment
+    if current_segment and current_dest:
+        segments.append({
+            "destination": current_dest,
+            "points": current_segment
+        })
+
+    # Process segments to compute stats and resolve destinations
+    result = []
+    for seg in segments:
+        if len(seg["points"]) < 2:
+            continue
+
+        points = seg["points"]
+        start_time = points[0]["timestamp"]
+        end_time = points[-1]["timestamp"]
+
+        # Calculate duration
+        from datetime import datetime
+        try:
+            start_dt = datetime.fromisoformat(start_time.replace("+00:00", ""))
+            end_dt = datetime.fromisoformat(end_time.replace("+00:00", ""))
+            duration_hours = (end_dt - start_dt).total_seconds() / 3600
+        except:
+            duration_hours = 0
+
+        # Calculate average speed (exclude zeros)
+        speeds = [p["speed"] for p in points if p["speed"] and p["speed"] > 0]
+        avg_speed = sum(speeds) / len(speeds) if speeds else 0
+
+        # Get midpoint for marker placement
+        mid_idx = len(points) // 2
+        mid_point = points[mid_idx]
+
+        # Resolve destination port
+        dest_port = await resolve_destination(db, seg["destination"])
+
+        result.append({
+            "destination_code": seg["destination"],
+            "destination_port": dest_port,
+            "start_time": start_time,
+            "end_time": end_time,
+            "duration_hours": round(duration_hours, 1),
+            "avg_speed": round(avg_speed, 1),
+            "point_count": len(points),
+            "midpoint_lat": mid_point["lat"],
+            "midpoint_lon": mid_point["lon"]
+        })
+
+    return result
+
+
+async def match_stop_to_port(db: aiosqlite.Connection, lat: float, lon: float) -> dict | None:
+    """Find nearest port to a stop location."""
+    import math
+
+    # Use bounding box for initial filter
+    lat_range = MAX_PORT_DISTANCE_KM / 111.12
+    lon_range = lat_range / math.cos(math.radians(lat))
+
+    query = """
+    SELECT locode, name, lat, lon, source, country, region
+    FROM ports
+    WHERE lat BETWEEN ? AND ?
+      AND lon BETWEEN ? AND ?
+      AND source IN ('wpi', 'locode')
+    """
+
+    async with db.execute(query, (
+        lat - lat_range, lat + lat_range,
+        lon - lon_range, lon + lon_range
+    )) as cursor:
+        rows = await cursor.fetchall()
+
+    best_match = None
+    best_distance = float('inf')
+
+    for row in rows:
+        port_lat, port_lon = row[2], row[3]
+        distance = haversine_km(lat, lon, port_lat, port_lon)
+
+        if distance < best_distance and distance <= MAX_PORT_DISTANCE_KM:
+            best_distance = distance
+            best_match = {
+                "locode": row[0],
+                "name": row[1],
+                "lat": port_lat,
+                "lon": port_lon,
+                "source": row[4],
+                "country": row[5],
+                "region": row[6],
+                "distance_km": round(distance, 2)
+            }
+
+    return best_match
+
+
 class ConnectionManager:
     """Manages WebSocket connections"""
 
@@ -512,6 +745,11 @@ async def get_vessel(mmsi: int):
                         eta_hours = distance / speed
                         result["destination_eta_hours"] = round(eta_hours, 1)
 
+        # Detect port visits dynamically from track data
+        visits = await detect_port_visits(db, mmsi)
+        if visits:
+            result["port_visits"] = visits
+
         return result
 
 
@@ -519,9 +757,13 @@ async def get_vessel(mmsi: int):
 async def get_vessel_track(
     mmsi: int,
     limit: int = Query(default=None, description="Max positions to return"),
-    hours: int = Query(default=None, description="Hours of history")
+    hours: int = Query(default=None, description="Hours of history"),
+    include_analysis: bool = Query(default=False, description="Include port stops and voyage segments")
 ):
-    """Return position history for a specific vessel"""
+    """Return position history for a specific vessel.
+
+    When include_analysis=true, also returns detected port stops and voyage segments.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
@@ -546,8 +788,31 @@ async def get_vessel_track(
         async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
 
-    positions = [row_to_dict(row) for row in rows]
-    return {"mmsi": mmsi, "positions": positions, "count": len(positions)}
+        positions = [row_to_dict(row) for row in rows]
+
+        result = {"mmsi": mmsi, "positions": positions, "count": len(positions)}
+
+        # Include port stops and voyage segments if requested
+        if include_analysis:
+            port_stops = await detect_port_visits(db, mmsi)
+            voyage_segments = await detect_voyage_segments(db, mmsi)
+            result["port_stops"] = port_stops
+            result["voyage_segments"] = voyage_segments
+
+    return result
+
+
+@app.get("/api/vessel/{mmsi}/port-visits")
+async def get_vessel_port_visits(mmsi: int):
+    """Return detected port visits for a vessel.
+
+    Port visits are detected dynamically by analyzing track data for stationary
+    periods (speed < 0.5 knots for > 1 hour) and matching to nearest known ports.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        visits = await detect_port_visits(db, mmsi)
+
+    return {"mmsi": mmsi, "port_visits": visits, "count": len(visits)}
 
 
 @app.get("/api/vessel/{mmsi}/messages")

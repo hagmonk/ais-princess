@@ -508,6 +508,78 @@ function updateLayers() {
                     pickable: false,
                 }));
             }
+
+            // Port stop markers (shown when names are enabled)
+            if (s.showVesselNames && currentPortStops.length > 0) {
+                // Port stop icons (anchor markers)
+                layers.push(new deck.ScatterplotLayer({
+                    id: 'port-stops-marker-layer',
+                    data: currentPortStops,
+                    getPosition: d => [d.lon, d.lat],
+                    getRadius: 10,
+                    getFillColor: [76, 175, 80, 220],  // Green for port stops
+                    getLineColor: [255, 255, 255, 255],
+                    lineWidthMinPixels: 2,
+                    stroked: true,
+                    radiusMinPixels: 8,
+                    radiusMaxPixels: 14,
+                    pickable: true,
+                }));
+
+                // Port stop labels
+                layers.push(new deck.TextLayer({
+                    id: 'port-stops-label-layer',
+                    data: currentPortStops,
+                    getPosition: d => [d.lon, d.lat],
+                    getText: d => formatPortStopLabel(d),
+                    getColor: [76, 175, 80, 255],
+                    getSize: 12,
+                    getTextAnchor: 'start',
+                    getAlignmentBaseline: 'center',
+                    getPixelOffset: [14, 0],
+                    fontFamily: 'Arial, sans-serif',
+                    fontWeight: 'bold',
+                    background: true,
+                    getBackgroundColor: [0, 0, 0, 180],
+                    backgroundPadding: [4, 2],
+                }));
+            }
+
+            // Voyage segment markers (shown when names are enabled)
+            if (s.showVesselNames && currentVoyageSegments.length > 0) {
+                // Voyage segment icons (navigation markers)
+                layers.push(new deck.ScatterplotLayer({
+                    id: 'voyage-segments-marker-layer',
+                    data: currentVoyageSegments,
+                    getPosition: d => [d.midpoint_lon, d.midpoint_lat],
+                    getRadius: 8,
+                    getFillColor: [33, 150, 243, 200],  // Blue for voyage segments
+                    getLineColor: [255, 255, 255, 255],
+                    lineWidthMinPixels: 1,
+                    stroked: true,
+                    radiusMinPixels: 6,
+                    radiusMaxPixels: 12,
+                    pickable: true,
+                }));
+
+                // Voyage segment labels
+                layers.push(new deck.TextLayer({
+                    id: 'voyage-segments-label-layer',
+                    data: currentVoyageSegments,
+                    getPosition: d => [d.midpoint_lon, d.midpoint_lat],
+                    getText: d => formatVoyageSegmentLabel(d),
+                    getColor: [33, 150, 243, 255],
+                    getSize: 11,
+                    getTextAnchor: 'start',
+                    getAlignmentBaseline: 'center',
+                    getPixelOffset: [12, 0],
+                    fontFamily: 'Arial, sans-serif',
+                    fontWeight: 'normal',
+                    background: true,
+                    getBackgroundColor: [0, 0, 0, 160],
+                    backgroundPadding: [3, 2],
+                }));
+            }
         }
     }
 
@@ -665,6 +737,89 @@ function getTrackPointColor(msgType) {
         case 27: return [200, 100, 255, 180];                // Purple - Long range
         default: return [150, 150, 150, 180];                // Gray
     }
+}
+
+// Format port stop label for map display
+function formatPortStopLabel(stop) {
+    const lines = [];
+
+    // Line 1: Port code and name
+    lines.push(`${stop.locode} - ${stop.name}`);
+
+    // Line 2: Location (country or region)
+    if (stop.country) {
+        lines.push(stop.country);
+    }
+
+    // Line 3: Duration
+    const hours = stop.duration_hours;
+    const durationStr = hours >= 24
+        ? `${Math.floor(hours / 24)}d ${Math.round(hours % 24)}h`
+        : `${Math.round(hours)}h`;
+    lines.push(`Duration: ${durationStr}`);
+
+    // Line 4: Arrival time
+    const arrival = new Date(stop.arrival);
+    const arrivalStr = arrival.toLocaleString([], {
+        month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+    });
+    lines.push(`Arr: ${arrivalStr}`);
+
+    // Line 5: Departure time (if available)
+    if (stop.departure) {
+        const departure = new Date(stop.departure);
+        const departureStr = departure.toLocaleString([], {
+            month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+        lines.push(`Dep: ${departureStr}`);
+    }
+
+    return lines.join('\n');
+}
+
+// Format voyage segment label for map display
+function formatVoyageSegmentLabel(segment) {
+    const lines = [];
+
+    // Line 1: Destination
+    const port = segment.destination_port;
+    const destName = port ? port.name : segment.destination_code;
+    lines.push(`→ ${destName}`);
+
+    // Line 2: Country if available
+    if (port && port.country) {
+        lines.push(port.country);
+    }
+
+    // Line 3: Duration
+    const hours = segment.duration_hours;
+    const durationStr = hours >= 24
+        ? `${Math.floor(hours / 24)}d ${Math.round(hours % 24)}h`
+        : `${Math.round(hours)}h`;
+    lines.push(`Voyage: ${durationStr}`);
+
+    // Line 4: Average speed
+    lines.push(`Avg: ${segment.avg_speed} kts`);
+
+    // Line 5: Start time
+    const start = new Date(segment.start_time);
+    const startStr = start.toLocaleString([], {
+        month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+    });
+    lines.push(`Start: ${startStr}`);
+
+    // Line 6: End time
+    const end = new Date(segment.end_time);
+    const endStr = end.toLocaleString([], {
+        month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+    });
+    lines.push(`End: ${endStr}`);
+
+    return lines.join('\n');
 }
 
 function getVesselColor(vessel) {
@@ -968,10 +1123,14 @@ async function fetchVesselDetails(mmsi) {
     }
 }
 
+// Store port stops and voyage segments for map display
+let currentPortStops = [];
+let currentVoyageSegments = [];
+
 // Fetch historical track from backend API
 async function fetchTrack(mmsi) {
     try {
-        const response = await fetch(`/api/vessel/${mmsi}/track`);
+        const response = await fetch(`/api/vessel/${mmsi}/track?include_analysis=true`);
         if (!response.ok) {
             console.error(`Failed to fetch track for ${mmsi}: ${response.status}`);
             return;
@@ -982,6 +1141,11 @@ async function fetchTrack(mmsi) {
             console.log(`No track data for vessel ${mmsi}`);
             return;
         }
+
+        // Store port stops and voyage segments for map markers
+        currentPortStops = data.port_stops || [];
+        currentVoyageSegments = data.voyage_segments || [];
+        console.log(`Track analysis: ${currentPortStops.length} port stops, ${currentVoyageSegments.length} voyage segments`);
 
         console.log(`Fetched ${data.positions.length} track points for vessel ${mmsi}`);
 
@@ -1173,6 +1337,29 @@ function updateVesselDetails() {
         }
     }
 
+    // Format port visits if available
+    let portVisitsHtml = '';
+    if (v.port_visits && v.port_visits.length > 0) {
+        const visitItems = v.port_visits.map(visit => {
+            const arrivalDate = new Date(visit.arrival);
+            const dateStr = arrivalDate.toLocaleDateString([], { month: 'short', day: 'numeric' });
+            const durationStr = visit.duration_hours
+                ? `${Math.round(visit.duration_hours)}h`
+                : '';
+            return `<div class="port-visit-item">
+                <span class="port-visit-date">${dateStr}</span>
+                <span class="port-visit-name">${visit.name}</span>
+                <span class="port-visit-duration">${durationStr}</span>
+            </div>`;
+        }).join('');
+
+        portVisitsHtml = `
+        <div class="detail-section">
+            <h3>Recent Ports</h3>
+            <div class="port-visits-list">${visitItems}</div>
+        </div>`;
+    }
+
     container.innerHTML = `
         <div class="vessel-name">${v.shipname || 'Unknown Vessel'}</div>
         <div class="vessel-mmsi">MMSI: ${v.mmsi}${v.callsign ? ` | ${v.callsign}` : ''}</div>
@@ -1196,6 +1383,7 @@ function updateVesselDetails() {
                 <div class="detail-item"><div class="detail-label">Draught</div><div class="detail-value">${draught}</div></div>
             </div>
         </div>
+        ${portVisitsHtml}
         <div class="detail-section">
             <h3>Vessel Info</h3>
             <div class="detail-grid">
