@@ -117,6 +117,8 @@ function saveSettingsFromModal() {
         draught: document.getElementById('setting-chart-draught').checked,
     });
     closeSettingsModal();
+    updateVesselTable();  // Refresh table for age cutoff changes
+    updateLayers();       // Refresh map for all settings changes
 }
 
 function initSettings() {
@@ -137,6 +139,7 @@ function initSettings() {
     // Names toggle button (quick toggle without opening settings)
     document.getElementById('names-btn').addEventListener('click', () => {
         updateSettings({ showVesselNames: !settings.value.showVesselNames });
+        updateLayers();  // Refresh map to show/hide names
     });
 
     // Apply initial settings
@@ -226,6 +229,69 @@ const PORTS = {
     'OMDMC': { name: 'Muscat', lat: 23.5880, lon: 58.3829 },
 };
 
+// AIS Message Type Names
+const MESSAGE_TYPE_NAMES = {
+    1: 'Class A Position',
+    2: 'Class A Position',
+    3: 'Class A Position',
+    4: 'Base Station',
+    5: 'Static/Voyage',
+    6: 'Binary Addressed',
+    7: 'Binary Ack',
+    8: 'Binary Broadcast',
+    9: 'SAR Aircraft',
+    10: 'UTC Inquiry',
+    11: 'UTC Response',
+    12: 'Safety Addressed',
+    13: 'Safety Ack',
+    14: 'Safety Broadcast',
+    15: 'Interrogation',
+    16: 'Assignment Mode',
+    17: 'DGNSS Broadcast',
+    18: 'Class B Position',
+    19: 'Class B Extended',
+    20: 'Data Link Mgmt',
+    21: 'Aid to Navigation',
+    22: 'Channel Mgmt',
+    23: 'Group Assignment',
+    24: 'Static Data',
+    25: 'Binary Single Slot',
+    26: 'Binary Multi Slot',
+    27: 'Long Range Position',
+};
+
+function getMessageTypeName(msgType) {
+    return MESSAGE_TYPE_NAMES[msgType] || `Type ${msgType}`;
+}
+
+// Look up destination port from vessel destination string
+function lookupDestinationPort(destination) {
+    if (!destination) return null;
+
+    const dest = destination.trim().toUpperCase().replace(/\s+/g, '');
+
+    // Try exact match first
+    if (PORTS[dest]) {
+        return { code: dest, ...PORTS[dest] };
+    }
+
+    // Try first 5 characters (UN/LOCODE format)
+    const code5 = dest.substring(0, 5);
+    if (PORTS[code5]) {
+        return { code: code5, ...PORTS[code5] };
+    }
+
+    // Try to find by name match
+    const destLower = destination.toLowerCase();
+    for (const [code, port] of Object.entries(PORTS)) {
+        if (destLower.includes(port.name.toLowerCase())) {
+            return { code, ...port };
+        }
+    }
+
+    return null;
+}
+
 // Calculate great circle distance in nautical miles
 function calculateDistance(lat1, lon1, lat2, lon2) {
     const R = 3440.065; // Earth radius in nautical miles
@@ -276,6 +342,8 @@ function onTrackDataChanged(mmsi) {
     if (selectedMmsi.value === mmsi) {
         // Schedule throttled chart update
         scheduleChartUpdate();
+        // Update mobile time scrubber
+        updateTimeScrubber();
     }
 }
 
@@ -394,14 +462,16 @@ function updateLayers() {
             }));
 
             // Track points (base layer - all points same style)
+            // Use larger touch targets on mobile for better tappability
+            const isMobile = window.innerWidth <= 768;
             layers.push(new deck.ScatterplotLayer({
                 id: 'track-points-layer',
                 data: trackData,
                 getPosition: d => [d.lon, d.lat],
-                getRadius: 4,
+                getRadius: isMobile ? 8 : 4,
                 getFillColor: d => getTrackPointColor(d.msgType),
-                radiusMinPixels: 3,
-                radiusMaxPixels: 8,
+                radiusMinPixels: isMobile ? 6 : 3,
+                radiusMaxPixels: isMobile ? 12 : 8,
                 pickable: true,
                 onClick: ({ object }) => {
                     if (object) onPointClick(object);
@@ -477,6 +547,64 @@ function updateLayers() {
             getBackgroundColor: [0, 0, 0, 150],
             backgroundPadding: [2, 1],
         }));
+    }
+
+    // Destination marker for selected vessel
+    if (mmsi) {
+        const vessel = vessels.value.get(mmsi);
+        // Use API-resolved port if available, fallback to local lookup
+        const destPort = vessel?.destination_port
+            ? { code: vessel.destination_port.locode, name: vessel.destination_port.name, lat: vessel.destination_port.lat, lon: vessel.destination_port.lon }
+            : (vessel ? lookupDestinationPort(vessel.destination) : null);
+        if (destPort) {
+            // Draw line from vessel to destination
+            layers.push(new deck.PathLayer({
+                id: 'destination-route-layer',
+                data: [{ path: [[vessel.lon, vessel.lat], [destPort.lon, destPort.lat]] }],
+                getPath: d => d.path,
+                getColor: [255, 170, 0, 100],  // Orange, semi-transparent
+                getWidth: 2,
+                widthMinPixels: 1,
+                getDashArray: [8, 4],  // Dashed line
+            }));
+
+            // Destination marker (icon-like circle with pin)
+            layers.push(new deck.ScatterplotLayer({
+                id: 'destination-marker-layer',
+                data: [destPort],
+                getPosition: d => [d.lon, d.lat],
+                getRadius: 12,
+                getFillColor: [255, 100, 100, 200],  // Red destination marker
+                getLineColor: [255, 255, 255, 255],
+                lineWidthMinPixels: 2,
+                stroked: true,
+                radiusMinPixels: 8,
+                radiusMaxPixels: 16,
+                pickable: true,
+                onClick: () => {
+                    // Zoom to destination
+                    map.flyTo({ center: [destPort.lon, destPort.lat], zoom: 10 });
+                },
+            }));
+
+            // Destination label
+            layers.push(new deck.TextLayer({
+                id: 'destination-label-layer',
+                data: [destPort],
+                getPosition: d => [d.lon, d.lat],
+                getText: d => `📍 ${d.name}`,
+                getColor: [255, 100, 100, 255],
+                getSize: 14,
+                getTextAnchor: 'start',
+                getAlignmentBaseline: 'center',
+                getPixelOffset: [12, 0],
+                fontFamily: 'Arial, sans-serif',
+                fontWeight: 'bold',
+                background: true,
+                getBackgroundColor: [0, 0, 0, 180],
+                backgroundPadding: [4, 2],
+            }));
+        }
     }
 
     deckOverlay.setProps({ layers });
@@ -692,12 +820,22 @@ function updateVesselTable() {
     // Use filteredVessels computed signal - already filtered by timeline, type, and search
     const data = filteredVessels.value;
     vesselTable.replaceData(data);
-    // Show filtered count / total count
-    const total = totalVesselCount.value;
+
+    // Count vessels available in current time window (ignoring type/search filters)
+    // This gives a meaningful "total" that represents what's currently receivable
+    const cutoff = timelineCutoff.value;
+    let availableInTimeWindow = 0;
+    vessels.value.forEach(v => {
+        if (v.lat == null || v.lon == null) return;
+        const lastUpdate = v.lastUpdate ? new Date(v.lastUpdate).getTime() : 0;
+        if (cutoff > 0 && lastUpdate < cutoff) return;
+        availableInTimeWindow++;
+    });
+
     const filtered = data.length;
-    document.getElementById('vessel-count').textContent = filtered === total
-        ? `${total} ${total === 1 ? 'vessel' : 'vessels'}`
-        : `${filtered}/${total} vessels`;
+    document.getElementById('vessel-count').textContent = filtered === availableInTimeWindow
+        ? `${availableInTimeWindow} ${availableInTimeWindow === 1 ? 'vessel' : 'vessels'}`
+        : `${filtered}/${availableInTimeWindow} vessels`;
     updateTypeCounts();
 }
 
@@ -744,11 +882,23 @@ function getVesselCategory(vessel) {
 // Left as placeholder for backwards compatibility
 
 function updateTypeCounts() {
+    // Count only vessels that pass the time filter (but ignore type/search filters)
+    // This shows how many of each type are available within the current time window
+    const cutoff = timelineCutoff.value;
     const counts = { all: 0, passenger: 0, cargo: 0, tanker: 0, fishing: 0, tug: 0, aton: 0, other: 0 };
+
     vessels.value.forEach(v => {
+        // Must have position
+        if (v.lat == null || v.lon == null) return;
+
+        // Filter by last update time (same as filteredVessels)
+        const lastUpdate = v.lastUpdate ? new Date(v.lastUpdate).getTime() : 0;
+        if (cutoff > 0 && lastUpdate < cutoff) return;
+
         counts.all++;
         counts[getVesselCategory(v)]++;
     });
+
     document.querySelectorAll('.type-chip').forEach(chip => {
         const type = chip.dataset.type;
         const count = counts[type] || 0;
@@ -768,12 +918,12 @@ function selectVessel(mmsi) {
     // Update URL hash for debugging
     updateUrlHash(mmsi);
 
-    // Show details panel
-    const sidebarBottom = document.getElementById('sidebar-bottom');
-    sidebarBottom.classList.remove('hidden');
-    document.getElementById('detail-title').textContent = 'Vessel Details';
-    document.getElementById('vessel-details').classList.remove('hidden');
-    document.getElementById('message-details').classList.add('hidden');
+    // Get vessel info for nav title
+    const vessel = vessels.value.get(mmsi);
+    const vesselName = vessel?.shipname || `MMSI ${mmsi}`;
+
+    // Navigate to vessel detail view
+    navigateTo('vessel-detail', vesselName);
 
     updateVesselDetails();
     updateLayers();
@@ -782,16 +932,39 @@ function selectVessel(mmsi) {
     // Fetch historical track data from backend
     fetchTrack(mmsi);
 
-    // Highlight row in table
-    if (vesselTable) {
-        vesselTable.deselectRow();
-        const row = vesselTable.getRows().find(r => r.getData().mmsi === mmsi);
-        if (row) { row.select(); row.scrollTo(); }
-    }
+    // Fetch vessel details from API (includes resolved destination)
+    fetchVesselDetails(mmsi);
 
-    // Close sidebar on mobile after selection for better UX
-    if (window.innerWidth <= 768) {
-        closeMobileSidebar();
+    // Zoom to vessel on map
+    zoomToVessel(mmsi);
+
+    // Hide mobile global timeline when vessel is selected
+    updateMobileTimelineVisibility();
+}
+
+// Fetch vessel details from API (includes resolved destination port)
+async function fetchVesselDetails(mmsi) {
+    try {
+        const response = await fetch(`/api/vessel/${mmsi}`);
+        if (!response.ok) return;
+
+        const data = await response.json();
+
+        // Update vessel with resolved destination data
+        const vessel = vessels.value.get(mmsi);
+        if (vessel && data.destination_port) {
+            vessel.destination_port = data.destination_port;
+            vessel.destination_distance_nm = data.destination_distance_nm;
+            vessel.destination_eta_hours = data.destination_eta_hours;
+
+            // Re-render vessel details with resolved port
+            if (selectedMmsi.value === mmsi) {
+                updateVesselDetails();
+                updateLayers();  // Update destination marker
+            }
+        }
+    } catch (err) {
+        console.error('Failed to fetch vessel details:', err);
     }
 }
 
@@ -884,10 +1057,8 @@ function selectMessage(msg) {
 }
 
 function closeDetails() {
-    deselectVessel();  // Use action from state.js which clears all selection state
-    updateUrlHash(null);  // Clear URL hash
-    document.getElementById('sidebar-bottom').classList.add('hidden');
-    document.getElementById('charts-panel').classList.add('hidden');
+    // Navigate back to vessels list
+    navigateToRoot('vessels');
 
     // Reset timeline slider to 100 (now)
     const slider = document.getElementById('timeline-slider');
@@ -970,16 +1141,35 @@ function updateVesselDetails() {
     const draught = v.draught != null ? `${v.draught}m` : 'N/A';
     const eta = formatETA(v);
 
-    // Calculate distance to destination
-    const distInfo = getDistanceToDestination(v);
+    // Use API-resolved destination if available, fallback to local lookup
     let distanceStr = 'N/A';
     let calcEtaStr = '';
-    if (distInfo) {
-        distanceStr = `${Math.round(distInfo.distance)} nm to ${distInfo.portName}`;
-        if (distInfo.etaHours != null) {
-            const days = Math.floor(distInfo.etaHours / 24);
-            const hours = Math.round(distInfo.etaHours % 24);
-            calcEtaStr = days > 0 ? ` (~${days}d ${hours}h at current speed)` : ` (~${hours}h at current speed)`;
+    if (v.destination_port) {
+        // Use server-resolved port data
+        const portName = v.destination_port.name;
+        const distance = v.destination_distance_nm;
+        const etaHours = v.destination_eta_hours;
+
+        if (distance != null) {
+            distanceStr = `${Math.round(distance)} nm to ${portName}`;
+            if (etaHours != null) {
+                const days = Math.floor(etaHours / 24);
+                const hours = Math.round(etaHours % 24);
+                calcEtaStr = days > 0 ? ` (~${days}d ${hours}h at current speed)` : ` (~${hours}h at current speed)`;
+            }
+        } else {
+            distanceStr = portName;  // Port resolved but no position to calculate from
+        }
+    } else {
+        // Fallback to local PORTS lookup
+        const distInfo = getDistanceToDestination(v);
+        if (distInfo) {
+            distanceStr = `${Math.round(distInfo.distance)} nm to ${distInfo.portName}`;
+            if (distInfo.etaHours != null) {
+                const days = Math.floor(distInfo.etaHours / 24);
+                const hours = Math.round(distInfo.etaHours % 24);
+                calcEtaStr = days > 0 ? ` (~${days}d ${hours}h at current speed)` : ` (~${hours}h at current speed)`;
+            }
         }
     }
 
@@ -1019,7 +1209,7 @@ function updateVesselDetails() {
 
 // Human-readable field labels and formatting
 const MESSAGE_FIELD_CONFIG = {
-    msg_type: { label: 'Message Type', format: v => `Type ${v} (${getMessageTypeName(v)})` },
+    msg_type: { label: 'Message Type', format: v => `Type ${v} (${MESSAGE_TYPE_NAMES[v] || 'Unknown'})` },
     mmsi: { label: 'MMSI' },
     shipname: { label: 'Ship Name' },
     callsign: { label: 'Call Sign' },
@@ -1030,6 +1220,7 @@ const MESSAGE_FIELD_CONFIG = {
     course: { label: 'Course', format: v => `${v.toFixed(1)}°` },
     heading: { label: 'Heading', format: v => v === 511 ? 'N/A' : `${v}°` },
     status: { label: 'Nav Status', format: v => NAV_STATUS[v] || `Unknown (${v})` },
+    nav_status: { label: 'Nav Status', format: v => NAV_STATUS[v] || `Unknown (${v})` },
     turn: { label: 'Rate of Turn', format: v => v === 128 ? 'N/A' : `${v}°/min` },
     accuracy: { label: 'Position Accuracy', format: v => v ? 'High (<10m)' : 'Low (>10m)' },
     maneuver: { label: 'Maneuver', format: v => v === 0 ? 'Not available' : v === 1 ? 'No special' : 'Special maneuver' },
@@ -1046,17 +1237,17 @@ const MESSAGE_FIELD_CONFIG = {
     time: { label: 'Time', format: v => typeof v === 'string' ? v : new Date(v).toLocaleTimeString() },
     repeat: { label: 'Repeat Indicator' },
     id: { label: 'Message ID' },
+    // Binary message fields
+    message_type: { label: 'Category' },
+    dac: { label: 'DAC (Designated Area Code)' },
+    fid: { label: 'FID (Function ID)' },
+    dest_mmsi: { label: 'Destination MMSI' },
+    text: { label: 'Safety Text' },
+    // Hide internal fields
+    raw_message_id: { hidden: true },
+    raw_data: { hidden: true },
+    decoded_json: { hidden: true, custom: true },  // Custom rendering
 };
-
-function getMessageTypeName(type) {
-    const names = {
-        1: 'Position Report A', 2: 'Position Report A', 3: 'Position Report A',
-        4: 'Base Station', 5: 'Static & Voyage',
-        18: 'Position Report B', 19: 'Extended Position B',
-        21: 'Aid to Navigation', 24: 'Static Data B',
-    };
-    return names[type] || 'Other';
-}
 
 function updateMessageDetails() {
     const container = document.getElementById('message-details');
@@ -1065,8 +1256,13 @@ function updateMessageDetails() {
         container.innerHTML = '';
         return;
     }
+
+    // Filter and format standard fields
     const fields = Object.entries(msg)
-        .filter(([k]) => !['raw_nmea'].includes(k))
+        .filter(([k]) => {
+            const config = MESSAGE_FIELD_CONFIG[k];
+            return !config?.hidden && !['raw_nmea'].includes(k);
+        })
         .map(([k, v]) => {
             const config = MESSAGE_FIELD_CONFIG[k];
             const label = config?.label || k;
@@ -1075,7 +1271,87 @@ function updateMessageDetails() {
         })
         .join('');
 
-    container.innerHTML = `<div class="message-fields">${fields}</div>`;
+    // Render decoded binary data if present
+    let decodedSection = '';
+    if (msg.decoded_json) {
+        try {
+            const decoded = typeof msg.decoded_json === 'string' ? JSON.parse(msg.decoded_json) : msg.decoded_json;
+            if (decoded && typeof decoded === 'object') {
+                decodedSection = renderDecodedBinaryData(decoded);
+            }
+        } catch (e) {
+            console.error('Failed to parse decoded_json:', e);
+        }
+    }
+
+    container.innerHTML = `<div class="message-fields">${fields}</div>${decodedSection}`;
+}
+
+function renderDecodedBinaryData(decoded) {
+    // Check if it's an error message from the decoder
+    if (decoded.error) {
+        return `<div class="decoded-section decoded-error">
+            <h4>Binary Payload</h4>
+            <div class="decoded-note">${decoded.error}</div>
+        </div>`;
+    }
+
+    // Render decoded fields
+    const fields = Object.entries(decoded)
+        .filter(([k]) => k !== 'error')
+        .map(([k, v]) => {
+            const label = formatDecodedFieldLabel(k);
+            const value = formatDecodedValue(k, v);
+            return `<div class="message-field"><span class="message-field-key">${label}</span><span class="message-field-value">${value}</span></div>`;
+        })
+        .join('');
+
+    return `<div class="decoded-section">
+        <h4>Decoded Payload</h4>
+        <div class="decoded-fields">${fields}</div>
+    </div>`;
+}
+
+function formatDecodedFieldLabel(key) {
+    // Convert snake_case to Title Case
+    return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function formatDecodedValue(key, value) {
+    if (value === null || value === undefined) return 'N/A';
+
+    // Handle specific field types
+    if (key.includes('lat') || key.includes('latitude')) {
+        return typeof value === 'number' ? `${value.toFixed(5)}°` : value;
+    }
+    if (key.includes('lon') || key.includes('longitude')) {
+        return typeof value === 'number' ? `${value.toFixed(5)}°` : value;
+    }
+    if (key.includes('speed')) {
+        return typeof value === 'number' ? `${value.toFixed(1)} kts` : value;
+    }
+    if (key.includes('course') || key.includes('direction') || key.includes('heading')) {
+        return typeof value === 'number' ? `${value.toFixed(1)}°` : value;
+    }
+    if (key.includes('temperature') || key.includes('temp')) {
+        return typeof value === 'number' ? `${value.toFixed(1)}°C` : value;
+    }
+    if (key.includes('pressure')) {
+        return typeof value === 'number' ? `${value.toFixed(1)} hPa` : value;
+    }
+    if (key.includes('wind')) {
+        return typeof value === 'number' ? `${value.toFixed(1)} m/s` : value;
+    }
+
+    // Handle arrays and objects
+    if (Array.isArray(value)) {
+        return value.map(v => formatDecodedValue('', v)).join(', ');
+    }
+    if (typeof value === 'object') {
+        return JSON.stringify(value);
+    }
+
+    return String(value);
 }
 
 function formatValue(v) {
@@ -1389,7 +1665,12 @@ function initTimelineSlider() {
     fetchTimeRange();
 
     slider.addEventListener('input', (e) => {
-        setTimelinePosition(parseInt(e.target.value, 10));
+        const value = parseInt(e.target.value, 10);
+        setTimelinePosition(value);
+
+        // Sync mobile slider
+        const mobileSlider = document.getElementById('mobile-timeline-slider');
+        if (mobileSlider) mobileSlider.value = value;
 
         // Different behavior based on whether a vessel is selected
         if (selectedMmsi.value) {
@@ -1399,6 +1680,7 @@ function initTimelineSlider() {
             // Global mode: filter visible vessels - signals handle value updates
             updateVesselTable();  // Refresh table with new filtered data
             updateLayers();
+            updateMobileTimelineLabel();
         }
         updateTimelineLabel();
     });
@@ -1408,7 +1690,13 @@ function initTimelineSlider() {
         slider.value = 100;
         setTimelinePosition(100);
         setHighlightPoint(null);
+
+        // Sync mobile slider
+        const mobileSlider = document.getElementById('mobile-timeline-slider');
+        if (mobileSlider) mobileSlider.value = 100;
+
         updateTimelineLabel();
+        updateMobileTimelineLabel();
         updateVesselTable();
         updateLayers();
     });
@@ -1562,37 +1850,28 @@ function initResizeHandlers() {
     const sidebar = document.getElementById('sidebar');
     let isResizingSidebar = false;
 
-    sidebarResize.addEventListener('mousedown', () => {
-        isResizingSidebar = true;
-        sidebarResize.classList.add('resizing');
-        document.body.style.cursor = 'col-resize';
-        document.body.style.userSelect = 'none';
-    });
-
-    // Sidebar vertical split resize
-    const sidebarSplit = document.getElementById('sidebar-split');
-    const sidebarTop = document.getElementById('sidebar-top');
-    const sidebarBottom = document.getElementById('sidebar-bottom');
-    let isResizingSplit = false;
-
-    sidebarSplit.addEventListener('mousedown', () => {
-        isResizingSplit = true;
-        sidebarSplit.classList.add('resizing');
-        document.body.style.cursor = 'ns-resize';
-        document.body.style.userSelect = 'none';
-    });
+    if (sidebarResize) {
+        sidebarResize.addEventListener('mousedown', () => {
+            isResizingSidebar = true;
+            sidebarResize.classList.add('resizing');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+    }
 
     // Charts vertical resize
     const chartsResize = document.getElementById('charts-resize');
     const chartsPanel = document.getElementById('charts-panel');
     let isResizingCharts = false;
 
-    chartsResize.addEventListener('mousedown', () => {
-        isResizingCharts = true;
-        chartsResize.classList.add('resizing');
-        document.body.style.cursor = 'ns-resize';
-        document.body.style.userSelect = 'none';
-    });
+    if (chartsResize) {
+        chartsResize.addEventListener('mousedown', () => {
+            isResizingCharts = true;
+            chartsResize.classList.add('resizing');
+            document.body.style.cursor = 'ns-resize';
+            document.body.style.userSelect = 'none';
+        });
+    }
 
     document.addEventListener('mousemove', (e) => {
         if (isResizingSidebar) {
@@ -1600,17 +1879,6 @@ function initResizeHandlers() {
             const newWidth = mainWidth - e.clientX;
             if (newWidth >= 280 && newWidth <= 500) {
                 sidebar.style.width = newWidth + 'px';
-            }
-        }
-
-        if (isResizingSplit) {
-            const sidebarRect = sidebar.getBoundingClientRect();
-            const newTopHeight = e.clientY - sidebarRect.top;
-            const sidebarHeight = sidebarRect.height;
-            if (newTopHeight >= 150 && newTopHeight <= sidebarHeight - 100) {
-                sidebarTop.style.flex = 'none';
-                sidebarTop.style.height = newTopHeight + 'px';
-                sidebarBottom.style.height = (sidebarHeight - newTopHeight - 5) + 'px';
             }
         }
 
@@ -1627,15 +1895,11 @@ function initResizeHandlers() {
     document.addEventListener('mouseup', () => {
         if (isResizingSidebar) {
             isResizingSidebar = false;
-            sidebarResize.classList.remove('resizing');
-        }
-        if (isResizingSplit) {
-            isResizingSplit = false;
-            sidebarSplit.classList.remove('resizing');
+            if (sidebarResize) sidebarResize.classList.remove('resizing');
         }
         if (isResizingCharts) {
             isResizingCharts = false;
-            chartsResize.classList.remove('resizing');
+            if (chartsResize) chartsResize.classList.remove('resizing');
         }
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
@@ -1648,11 +1912,11 @@ function initResizeHandlers() {
 }
 
 // ============================================================================
-// Close Details Button
+// Close Details Button (Legacy - now handled by back navigation)
 // ============================================================================
 
 function initCloseDetails() {
-    document.getElementById('close-details').addEventListener('click', closeDetails);
+    // Legacy function - close now handled by navigateBack()
 }
 
 // ============================================================================
@@ -1669,18 +1933,12 @@ function initSearch() {
 }
 
 // ============================================================================
-// List Tabs (Vessels / Messages)
+// List Tabs (Legacy - now handled by hierarchical navigation)
 // ============================================================================
 
 function initListTabs() {
-    document.querySelectorAll('.list-tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            document.querySelectorAll('.list-tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.list-content').forEach(c => c.classList.remove('active'));
-            tab.classList.add('active');
-            document.getElementById(`${tab.dataset.list}-list`).classList.add('active');
-        });
-    });
+    // Legacy function - tabs now handled by initNavigation()
+    // Kept for backwards compatibility
 }
 
 // ============================================================================
@@ -1746,28 +2004,34 @@ function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/ais`;
     console.log('Connecting to WebSocket:', wsUrl);
+    console.log('Page protocol:', window.location.protocol, 'Host:', window.location.host);
 
     try {
         ws = new WebSocket(wsUrl);
+        console.log('WebSocket object created, readyState:', ws.readyState);
     } catch (e) {
-        console.error('WebSocket creation failed:', e);
+        console.error('WebSocket creation failed:', e.name, e.message);
         return;
     }
 
     ws.onopen = () => {
-        console.log('WebSocket connected');
+        console.log('WebSocket connected, readyState:', ws.readyState);
         setConnected(true);
         updateConnectionStatus();
     };
 
     ws.onclose = (event) => {
-        console.log('WebSocket closed:', event.code, event.reason);
+        // Close codes: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code
+        console.log('WebSocket closed - code:', event.code, 'reason:', event.reason, 'wasClean:', event.wasClean);
         setConnected(false);
         updateConnectionStatus();
         setTimeout(connectWebSocket, 2000);
     };
 
-    ws.onerror = (err) => console.error('WebSocket error:', err);
+    ws.onerror = (err) => {
+        console.error('WebSocket error:', err);
+        console.error('WebSocket readyState on error:', ws ? ws.readyState : 'null');
+    };
 
     ws.onmessage = (event) => {
         try {
@@ -1963,6 +2227,9 @@ function handleMessage(msg, batchMode = false) {
     onVesselDataChanged(mmsi);
     onTrackDataChanged(mmsi);
 
+    // Update vessel messages view if active
+    updateVesselMessagesIfActive(msg);
+
     // Zoom to fit all vessels on first data
     if (!mapInitialized.value && vessels.value.size > 0) {
         setMapInitialized(true);
@@ -2023,7 +2290,7 @@ function zoomToVessel(mmsi) {
     if (vessel && vessel.lat != null && vessel.lon != null &&
         vessel.lat >= -90 && vessel.lat <= 90 &&
         vessel.lon >= -180 && vessel.lon <= 180) {
-        map.flyTo({ center: [vessel.lon, vessel.lat], zoom: 12 });
+        map.flyTo({ center: [vessel.lon, vessel.lat], zoom: 14 });
     }
 }
 
@@ -2107,7 +2374,717 @@ function initMobileSidebar() {
         if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
             closeSidebar();
         }
+        // Update mobile timeline visibility on resize/orientation change
+        updateMobileTimelineVisibility();
     });
+}
+
+// ============================================================================
+// Mobile Charts (iOS-style bottom sheet)
+// ============================================================================
+
+let currentChartIndex = 0;
+const chartNames = ['speed', 'course', 'draught'];
+
+function initMobileCharts() {
+    const chartsContainer = document.getElementById('charts-container');
+    const indicators = document.getElementById('charts-indicators');
+    const pills = indicators.querySelectorAll('.chart-pill');
+    const timeScrubber = document.getElementById('time-scrubber-input');
+    const timeScrubberLabel = document.getElementById('time-scrubber-label');
+
+    // Pill click to switch charts
+    pills.forEach((pill, index) => {
+        pill.addEventListener('click', () => {
+            scrollToChart(index);
+        });
+    });
+
+    // Update pills on scroll
+    chartsContainer.addEventListener('scroll', () => {
+        const scrollLeft = chartsContainer.scrollLeft;
+        const width = chartsContainer.offsetWidth;
+        const newIndex = Math.round(scrollLeft / width);
+        if (newIndex !== currentChartIndex && newIndex >= 0 && newIndex < chartNames.length) {
+            currentChartIndex = newIndex;
+            updateChartPills();
+        }
+    }, { passive: true });
+
+    // Time scrubber
+    timeScrubber.addEventListener('input', () => {
+        const mmsi = selectedMmsi.value;
+        if (!mmsi || !tracks.value.has(mmsi)) return;
+
+        const track = tracks.value.get(mmsi);
+        if (!track || track.length === 0) return;
+
+        const percent = parseInt(timeScrubber.value);
+        const index = Math.floor((percent / 100) * (track.length - 1));
+        const point = track[Math.min(index, track.length - 1)];
+
+        if (point) {
+            // Update label
+            const date = new Date(point.time);
+            timeScrubberLabel.textContent = percent === 100 ? 'Now' : formatTime(date);
+
+            // Highlight point on map
+            highlightTrackPoint(mmsi, point);
+        }
+    });
+
+    // Handle touch on charts for uPlot (passive listeners for scroll perf)
+    chartsContainer.addEventListener('touchstart', handleChartTouch, { passive: false });
+    chartsContainer.addEventListener('touchmove', handleChartTouchMove, { passive: false });
+    chartsContainer.addEventListener('touchend', handleChartTouchEnd, { passive: true });
+}
+
+function scrollToChart(index) {
+    const chartsContainer = document.getElementById('charts-container');
+    const width = chartsContainer.offsetWidth;
+    chartsContainer.scrollTo({
+        left: width * index,
+        behavior: 'smooth'
+    });
+    currentChartIndex = index;
+    updateChartPills();
+}
+
+function updateChartPills() {
+    const pills = document.querySelectorAll('.chart-pill');
+    pills.forEach((pill, index) => {
+        if (index === currentChartIndex) {
+            pill.classList.add('active');
+        } else {
+            pill.classList.remove('active');
+        }
+    });
+}
+
+// Touch handling for uPlot charts on mobile
+let chartTouchStart = null;
+let chartTouchChart = null;
+
+function handleChartTouch(e) {
+    // Only handle single touch
+    if (e.touches.length !== 1) return;
+
+    const touch = e.touches[0];
+    const target = e.target;
+
+    // Check if touching inside a uPlot chart
+    const uplotOver = target.closest('.u-over');
+    if (!uplotOver) return;
+
+    chartTouchStart = {
+        x: touch.clientX,
+        y: touch.clientY,
+        time: Date.now()
+    };
+
+    // Find which chart
+    const wrapper = target.closest('[data-chart]');
+    if (wrapper) {
+        const chartName = wrapper.dataset.chart;
+        if (chartName === 'speed') chartTouchChart = speedChart;
+        else if (chartName === 'course') chartTouchChart = courseChart;
+        else if (chartName === 'draught') chartTouchChart = draughtChart;
+    }
+
+    // Prevent scroll while interacting with chart
+    if (chartTouchChart) {
+        e.preventDefault();
+    }
+}
+
+function handleChartTouchMove(e) {
+    if (!chartTouchStart || !chartTouchChart || e.touches.length !== 1) return;
+
+    const touch = e.touches[0];
+
+    // Calculate position relative to chart
+    const rect = chartTouchChart.over.getBoundingClientRect();
+    const x = touch.clientX - rect.left;
+
+    // Update cursor position in uPlot
+    if (x >= 0 && x <= rect.width) {
+        chartTouchChart.setCursor({ left: x, top: 0 });
+        e.preventDefault();
+    }
+}
+
+function handleChartTouchEnd(e) {
+    if (!chartTouchStart || !chartTouchChart) {
+        chartTouchStart = null;
+        chartTouchChart = null;
+        return;
+    }
+
+    const duration = Date.now() - chartTouchStart.time;
+
+    // If it was a quick tap (< 300ms), treat as click
+    if (duration < 300) {
+        handleChartClick(chartTouchChart);
+    }
+
+    chartTouchStart = null;
+    chartTouchChart = null;
+}
+
+// Update time scrubber when track changes
+function updateTimeScrubber() {
+    const timeScrubber = document.getElementById('time-scrubber-input');
+    const timeScrubberLabel = document.getElementById('time-scrubber-label');
+
+    if (!timeScrubber) return;
+
+    const mmsi = selectedMmsi.value;
+    if (!mmsi || !tracks.value.has(mmsi)) {
+        timeScrubber.value = 100;
+        timeScrubberLabel.textContent = 'Now';
+        return;
+    }
+
+    // Reset to "Now" when track changes
+    timeScrubber.value = 100;
+    timeScrubberLabel.textContent = 'Now';
+}
+
+function formatTime(date) {
+    const hours = date.getHours().toString().padStart(2, '0');
+    const mins = date.getMinutes().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${month}/${day} ${hours}:${mins}`;
+}
+
+// Highlight a track point on the map
+function highlightTrackPoint(mmsi, point) {
+    if (!point) return;
+
+    // Update highlighted point using the existing signal
+    setHighlightPoint({
+        mmsi: mmsi,
+        lat: point.lat,
+        lon: point.lon,
+        time: point.time,
+        speed: point.speed,
+        course: point.course
+    });
+
+    // Update layers to show highlight
+    updateLayers();
+
+    // Update highlight info display
+    updateHighlightInfo(point);
+}
+
+// ============================================================================
+// Mobile Global Timeline
+// ============================================================================
+
+function initMobileGlobalTimeline() {
+    const mobileTimeline = document.getElementById('mobile-timeline');
+    const mobileSlider = document.getElementById('mobile-timeline-slider');
+    const mobileValue = document.getElementById('mobile-timeline-value');
+    const desktopSlider = document.getElementById('timeline-slider');
+
+    if (!mobileSlider) return;
+
+    // Sync mobile slider with desktop slider on input
+    mobileSlider.addEventListener('input', (e) => {
+        const value = parseInt(e.target.value, 10);
+        setTimelinePosition(value);
+
+        // Sync desktop slider
+        if (desktopSlider) {
+            desktopSlider.value = value;
+        }
+
+        // Update display
+        updateMobileTimelineLabel();
+
+        // Filter vessels
+        updateVesselTable();
+        updateLayers();
+    });
+
+    // Double-tap to reset to now
+    let lastTap = 0;
+    mobileSlider.addEventListener('touchend', () => {
+        const now = Date.now();
+        if (now - lastTap < 300) {
+            mobileSlider.value = 100;
+            setTimelinePosition(100);
+            if (desktopSlider) desktopSlider.value = 100;
+            updateMobileTimelineLabel();
+            updateVesselTable();
+            updateLayers();
+        }
+        lastTap = now;
+    });
+
+    // Initial label
+    updateMobileTimelineLabel();
+}
+
+function updateMobileTimelineLabel() {
+    const label = document.getElementById('mobile-timeline-value');
+    if (!label) return;
+
+    const pos = timelinePosition.value;
+    const tv = timelineValue.value;
+
+    if (pos >= 100 || !tv) {
+        label.textContent = 'Now';
+        return;
+    }
+
+    const date = new Date(tv);
+    const now = new Date();
+
+    // If same day, show time only
+    if (date.toDateString() === now.toDateString()) {
+        label.textContent = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else {
+        label.textContent = date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+            ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+}
+
+function updateMobileTimelineVisibility() {
+    const mobileTimeline = document.getElementById('mobile-timeline');
+    if (!mobileTimeline) return;
+
+    // Only show on mobile (CSS handles hiding on desktop)
+    const isMobile = window.innerWidth <= 768;
+    const hasSelectedVessel = selectedMmsi.value !== null;
+
+    if (isMobile && !hasSelectedVessel) {
+        mobileTimeline.classList.remove('hidden');
+    } else {
+        mobileTimeline.classList.add('hidden');
+    }
+}
+
+// ============================================================================
+// Hierarchical Navigation
+// ============================================================================
+
+// Navigation state: tracks the view stack for back navigation
+const navStack = [];
+let currentView = 'vessels';
+
+function navigateTo(viewId, title, data = null) {
+    // Save current view to stack
+    if (currentView !== viewId) {
+        navStack.push({ view: currentView, title: document.getElementById('nav-title').textContent });
+    }
+
+    // Update view
+    showView(viewId, title);
+    currentView = viewId;
+
+    // Show/hide back button
+    const backBtn = document.getElementById('nav-back');
+    if (navStack.length > 0) {
+        backBtn.classList.remove('hidden');
+    } else {
+        backBtn.classList.add('hidden');
+    }
+
+    // Update bottom tabs
+    updateSidebarTabs(viewId);
+}
+
+function navigateBack() {
+    if (navStack.length === 0) return;
+
+    const prev = navStack.pop();
+    showView(prev.view, prev.title);
+    currentView = prev.view;
+
+    // Handle deselection when going back to vessels list
+    if (prev.view === 'vessels') {
+        deselectVessel();
+        updateUrlHash(null);
+        document.getElementById('charts-panel').classList.add('hidden');
+        updateMobileTimelineVisibility();
+    }
+
+    // Hide back button if at root
+    const backBtn = document.getElementById('nav-back');
+    if (navStack.length === 0) {
+        backBtn.classList.add('hidden');
+    }
+
+    // Update bottom tabs
+    updateSidebarTabs(prev.view);
+    updateLayers();
+}
+
+function navigateToRoot(viewId) {
+    // Clear navigation stack and go to root view
+    navStack.length = 0;
+    currentView = viewId;
+
+    const titles = {
+        'vessels': 'Vessels',
+        'all-messages': 'All Messages',
+    };
+
+    showView(viewId, titles[viewId] || 'Vessels');
+    document.getElementById('nav-back').classList.add('hidden');
+
+    // Deselect vessel when going to root
+    if (selectedMmsi.value) {
+        deselectVessel();
+        updateUrlHash(null);
+        document.getElementById('charts-panel').classList.add('hidden');
+        updateMobileTimelineVisibility();
+        updateLayers();
+    }
+
+    // Update bottom tabs
+    updateSidebarTabs(viewId);
+}
+
+function showView(viewId, title) {
+    // Hide all views
+    document.querySelectorAll('.sidebar-view').forEach(v => v.classList.remove('active'));
+
+    // Show target view
+    const targetView = document.getElementById(`view-${viewId}`);
+    if (targetView) {
+        targetView.classList.add('active');
+    }
+
+    // Update title
+    document.getElementById('nav-title').textContent = title;
+}
+
+function updateSidebarTabs(viewId) {
+    // Map drill-down views to their root tab
+    const rootViews = {
+        'vessels': 'vessels',
+        'vessel-detail': 'vessels',
+        'vessel-messages': 'vessels',
+        'all-messages': 'all-messages',
+    };
+    const rootView = rootViews[viewId] || 'vessels';
+
+    document.querySelectorAll('.sidebar-tab').forEach(tab => {
+        if (tab.dataset.view === rootView) {
+            tab.classList.add('active');
+        } else {
+            tab.classList.remove('active');
+        }
+    });
+}
+
+function initNavigation() {
+    // Back button
+    document.getElementById('nav-back').addEventListener('click', navigateBack);
+
+    // Bottom tabs
+    document.querySelectorAll('.sidebar-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            const viewId = tab.dataset.view;
+            navigateToRoot(viewId);
+        });
+    });
+
+    // Vessel detail action buttons
+    document.getElementById('zoom-to-vessel').addEventListener('click', () => {
+        const mmsi = selectedMmsi.value;
+        if (mmsi) {
+            zoomToVessel(mmsi);
+        }
+    });
+
+    document.getElementById('show-vessel-messages').addEventListener('click', () => {
+        const mmsi = selectedMmsi.value;
+        if (mmsi) {
+            showVesselMessages(mmsi);
+        }
+    });
+
+    document.getElementById('show-vessel-track').addEventListener('click', () => {
+        // Already showing track on map - just zoom to fit
+        const mmsi = selectedMmsi.value;
+        if (mmsi) {
+            zoomToVesselTrack(mmsi);
+        }
+    });
+}
+
+// ============================================================================
+// Vessel Messages View
+// ============================================================================
+
+let vesselMessagesTable = null;
+
+// Pagination and filter state
+const vesselMessagesState = {
+    mmsi: null,
+    offset: 0,
+    limit: 100,
+    total: 0,
+    sortOrder: 'desc',  // 'desc' = newest first, 'asc' = oldest first
+    hours: 24,          // null = all time
+    searchText: '',
+    allData: [],        // Store full page for client-side filtering
+};
+
+function initVesselMessagesTable() {
+    vesselMessagesTable = new Tabulator('#vessel-messages-table', {
+        data: [],
+        layout: 'fitColumns',
+        height: '100%',
+        selectable: 1,
+        columns: [
+            {
+                title: 'Time ↓',
+                field: 'timestamp',
+                width: 90,
+                headerClick: () => toggleMessageSort(),
+                formatter: cell => {
+                    const ts = cell.getValue();
+                    if (!ts) return '-';
+                    const d = new Date(ts);
+                    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                },
+            },
+            { title: 'Type', field: 'msg_type', width: 110, formatter: cell => {
+                const msgType = cell.getValue();
+                const name = getMessageTypeName(msgType);
+                return `<span title="Type ${msgType}">${name}</span>`;
+            }},
+            { title: 'Speed', field: 'speed', width: 55, formatter: cell => {
+                const val = cell.getValue();
+                return val != null ? val.toFixed(1) : '-';
+            }},
+            { title: 'Course', field: 'course', width: 55, formatter: cell => {
+                const val = cell.getValue();
+                return val != null ? `${Math.round(val)}°` : '-';
+            }},
+        ],
+    });
+
+    vesselMessagesTable.on('rowClick', (e, row) => {
+        const msg = row.getData();
+        showMessageDetail(msg);
+    });
+
+    // Initialize event listeners for controls
+    initVesselMessagesControls();
+}
+
+function initVesselMessagesControls() {
+    // Hours filter dropdown
+    document.getElementById('vessel-messages-hours').addEventListener('change', (e) => {
+        const val = e.target.value;
+        vesselMessagesState.hours = val === '' ? null : parseInt(val, 10);
+        vesselMessagesState.offset = 0;  // Reset to first page
+        loadVesselMessages();
+    });
+
+    // Search input with debounce
+    let searchTimeout = null;
+    document.getElementById('vessel-messages-search-input').addEventListener('input', (e) => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+            vesselMessagesState.searchText = e.target.value.toLowerCase();
+            applyMessagesSearch();
+        }, 200);
+    });
+
+    // Pagination buttons
+    document.getElementById('vessel-messages-prev').addEventListener('click', () => {
+        if (vesselMessagesState.offset > 0) {
+            vesselMessagesState.offset = Math.max(0, vesselMessagesState.offset - vesselMessagesState.limit);
+            loadVesselMessages();
+        }
+    });
+
+    document.getElementById('vessel-messages-next').addEventListener('click', () => {
+        if (vesselMessagesState.offset + vesselMessagesState.limit < vesselMessagesState.total) {
+            vesselMessagesState.offset += vesselMessagesState.limit;
+            loadVesselMessages();
+        }
+    });
+}
+
+function toggleMessageSort() {
+    vesselMessagesState.sortOrder = vesselMessagesState.sortOrder === 'desc' ? 'asc' : 'desc';
+    vesselMessagesState.offset = 0;  // Reset to first page when sorting changes
+
+    // Update column header to show sort direction
+    updateSortIndicator();
+
+    loadVesselMessages();
+}
+
+function updateSortIndicator() {
+    const arrow = vesselMessagesState.sortOrder === 'desc' ? '↓' : '↑';
+    const sortHint = vesselMessagesState.sortOrder === 'desc' ? 'Newest first' : 'Oldest first';
+
+    // Update the column header (Tabulator doesn't make this easy, so we update hint text)
+    document.getElementById('vessel-messages-sort-hint').textContent = sortHint;
+}
+
+async function showVesselMessages(mmsi) {
+    const vessel = vessels.value.get(mmsi);
+    const vesselName = vessel?.shipname || `MMSI ${mmsi}`;
+
+    // Navigate to vessel messages view
+    navigateTo('vessel-messages', `${vesselName} Messages`);
+
+    // Reset state for new vessel
+    vesselMessagesState.mmsi = mmsi;
+    vesselMessagesState.offset = 0;
+    vesselMessagesState.searchText = '';
+
+    // Reset UI controls
+    document.getElementById('vessel-messages-search-input').value = '';
+    document.getElementById('vessel-messages-hours').value = vesselMessagesState.hours || '';
+    updateSortIndicator();
+
+    // Hide message details initially
+    document.getElementById('message-details').classList.add('hidden');
+
+    // Load messages
+    await loadVesselMessages();
+}
+
+async function loadVesselMessages() {
+    const { mmsi, offset, limit, hours, sortOrder } = vesselMessagesState;
+    if (!mmsi) return;
+
+    // Show loading state
+    document.getElementById('vessel-messages-count').textContent = 'Loading...';
+
+    try {
+        // Build API URL with parameters
+        const params = new URLSearchParams({
+            limit: limit.toString(),
+            offset: offset.toString(),
+            sort_order: sortOrder,
+        });
+        if (hours !== null) {
+            params.set('hours', hours.toString());
+        }
+
+        const response = await fetch(`/api/vessel/${mmsi}/messages?${params}`);
+        const data = await response.json();
+
+        // Store data for client-side filtering
+        vesselMessagesState.allData = data.messages;
+        vesselMessagesState.total = data.total;
+
+        // Apply search filter and update display
+        applyMessagesSearch();
+
+        // Update pagination
+        updateMessagesPagination();
+
+    } catch (err) {
+        console.error('Failed to fetch vessel messages:', err);
+        document.getElementById('vessel-messages-count').textContent = 'Error loading messages';
+    }
+}
+
+function applyMessagesSearch() {
+    const { allData, searchText, total, hours } = vesselMessagesState;
+
+    // Filter data by search text (client-side filter on loaded page)
+    let filtered = allData;
+    if (searchText) {
+        filtered = allData.filter(m => {
+            const type = getMessageTypeName(m.msg_type).toLowerCase();
+            const ts = m.timestamp || '';
+            return type.includes(searchText) || ts.includes(searchText);
+        });
+    }
+
+    // Update count display
+    const hoursText = hours === null ? 'all time' : `${hours}h`;
+    if (searchText) {
+        document.getElementById('vessel-messages-count').textContent =
+            `${filtered.length} of ${allData.length} shown (${total} total, ${hoursText})`;
+    } else {
+        document.getElementById('vessel-messages-count').textContent =
+            `${allData.length} of ${total} messages (${hoursText})`;
+    }
+
+    // Update table
+    if (vesselMessagesTable) {
+        vesselMessagesTable.replaceData(filtered);
+    }
+}
+
+function updateMessagesPagination() {
+    const { offset, limit, total } = vesselMessagesState;
+
+    const currentPage = Math.floor(offset / limit) + 1;
+    const totalPages = Math.ceil(total / limit);
+
+    document.getElementById('vessel-messages-page-info').textContent =
+        totalPages > 0 ? `Page ${currentPage} of ${totalPages}` : 'No messages';
+
+    document.getElementById('vessel-messages-prev').disabled = offset === 0;
+    document.getElementById('vessel-messages-next').disabled = offset + limit >= total;
+}
+
+// Update vessel messages when new message arrives for selected vessel
+function updateVesselMessagesIfActive(msg) {
+    if (vesselMessagesState.mmsi && msg.mmsi === vesselMessagesState.mmsi && currentView === 'vessel-messages') {
+        // Only add to top if we're on first page and sorted by newest first
+        if (vesselMessagesState.offset === 0 && vesselMessagesState.sortOrder === 'desc') {
+            vesselMessagesState.allData.unshift(msg);
+            vesselMessagesState.total++;
+            applyMessagesSearch();
+            updateMessagesPagination();
+        }
+    }
+}
+
+// For backwards compatibility
+let currentVesselMessagesMMSI = null;
+// Keep in sync
+Object.defineProperty(window, 'currentVesselMessagesMMSI', {
+    get: () => vesselMessagesState.mmsi,
+    set: (v) => { vesselMessagesState.mmsi = v; }
+});
+
+function showMessageDetail(msg) {
+    selectMessage(msg);
+    // Show message details panel within vessel messages view
+    const detailsPanel = document.getElementById('message-details');
+    detailsPanel.classList.remove('hidden');
+    updateMessageDetails();
+}
+
+function zoomToVesselTrack(mmsi) {
+    const track = tracks.value.get(mmsi);
+    if (!track || track.length === 0) return;
+
+    if (track.length === 1) {
+        map.flyTo({ center: [track[0].lon, track[0].lat], zoom: 12 });
+        return;
+    }
+
+    // Fit bounds to track
+    const bounds = new maplibregl.LngLatBounds();
+    track.forEach(p => {
+        if (p.lat >= -90 && p.lat <= 90 && p.lon >= -180 && p.lon <= 180) {
+            bounds.extend([p.lon, p.lat]);
+        }
+    });
+
+    if (!bounds.isEmpty()) {
+        map.fitBounds(bounds, { padding: 50, maxZoom: 14 });
+    }
 }
 
 // ============================================================================
@@ -2125,16 +3102,20 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('Vessel table initialized');
         initMessageTable();
         console.log('Message table initialized');
-        initListTabs();
-        console.log('List tabs initialized');
+        initVesselMessagesTable();
+        console.log('Vessel messages table initialized');
+        initNavigation();
+        console.log('Navigation initialized');
         initTypeFilters();
         initSearch();
         initTimelineSlider();
         initStyleSelector();
         initGeolocation();
         initResizeHandlers();
-        initCloseDetails();
         initMobileSidebar();
+        initMobileCharts();
+        initMobileGlobalTimeline();
+        updateMobileTimelineVisibility();
         initEffects();
         console.log('All UI initialized, connecting WebSocket...');
         connectWebSocket();

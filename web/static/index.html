@@ -78,17 +78,19 @@
             <!-- Sidebar backdrop for mobile -->
             <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
 
-            <!-- Sidebar with split panels -->
+            <!-- Sidebar with hierarchical navigation -->
             <aside id="sidebar">
-                <!-- Close button for mobile -->
-                <button id="sidebar-close" title="Close">×</button>
-                <!-- Top panel: vessel/message list -->
-                <div id="sidebar-top">
-                    <div id="list-tabs">
-                        <button class="list-tab active" data-list="vessels">Vessels</button>
-                        <button class="list-tab" data-list="messages">Messages</button>
-                    </div>
-                    <div id="vessels-list" class="list-content active">
+                <!-- Navigation header -->
+                <div id="sidebar-nav">
+                    <button id="nav-back" class="hidden" title="Back">←</button>
+                    <span id="nav-title">Vessels</span>
+                    <button id="sidebar-close" title="Close">×</button>
+                </div>
+
+                <!-- View container - each view replaces the previous -->
+                <div id="sidebar-views">
+                    <!-- Level 1: Vessels list (default) -->
+                    <div id="view-vessels" class="sidebar-view active">
                         <div id="search-box">
                             <input type="text" id="search-input" placeholder="Search vessels...">
                         </div>
@@ -104,50 +106,120 @@
                         </div>
                         <div id="vessel-table"></div>
                     </div>
-                    <div id="messages-list" class="list-content">
+
+                    <!-- Level 2: Vessel detail -->
+                    <div id="view-vessel-detail" class="sidebar-view">
+                        <div id="vessel-details"></div>
+                        <div class="detail-actions">
+                            <button id="zoom-to-vessel" class="action-btn action-btn-inline">
+                                <span class="action-icon">🔍</span>
+                                <span>Zoom to Vessel</span>
+                            </button>
+                            <button id="show-vessel-messages" class="action-btn">
+                                <span class="action-icon">📨</span>
+                                <span>View Messages</span>
+                                <span class="action-arrow">→</span>
+                            </button>
+                            <button id="show-vessel-track" class="action-btn">
+                                <span class="action-icon">📍</span>
+                                <span>Track History</span>
+                                <span class="action-arrow">→</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Level 3: Vessel messages -->
+                    <div id="view-vessel-messages" class="sidebar-view">
+                        <div id="vessel-messages-controls">
+                            <div id="vessel-messages-search">
+                                <input type="text" id="vessel-messages-search-input" placeholder="Search messages...">
+                            </div>
+                            <div id="vessel-messages-time-filter">
+                                <select id="vessel-messages-hours">
+                                    <option value="1">1 hour</option>
+                                    <option value="6">6 hours</option>
+                                    <option value="24" selected>24 hours</option>
+                                    <option value="168">7 days</option>
+                                    <option value="">All time</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="vessel-messages-header">
+                            <span id="vessel-messages-count">0 messages</span>
+                            <span id="vessel-messages-sort-hint">Click Time to sort</span>
+                        </div>
+                        <div id="vessel-messages-table"></div>
+                        <div id="vessel-messages-pagination">
+                            <button id="vessel-messages-prev" disabled>← Prev</button>
+                            <span id="vessel-messages-page-info">Page 1</span>
+                            <button id="vessel-messages-next" disabled>Next →</button>
+                        </div>
+                        <!-- Message detail panel -->
+                        <div id="message-details" class="hidden"></div>
+                    </div>
+
+                    <!-- Alternate top level: All messages -->
+                    <div id="view-all-messages" class="sidebar-view">
                         <div id="message-table"></div>
                     </div>
                 </div>
 
-                <!-- Vertical resize handle -->
-                <div id="sidebar-split"></div>
-
-                <!-- Bottom panel: details (shown when vessel/message selected) -->
-                <div id="sidebar-bottom" class="hidden">
-                    <div id="detail-header">
-                        <span id="detail-title">Details</span>
-                        <button id="close-details" title="Close">×</button>
-                    </div>
-                    <div id="detail-content">
-                        <!-- Vessel details -->
-                        <div id="vessel-details"></div>
-                        <!-- Message details -->
-                        <div id="message-details" class="hidden"></div>
-                    </div>
+                <!-- Bottom tabs for quick access -->
+                <div id="sidebar-tabs">
+                    <button class="sidebar-tab active" data-view="vessels" title="Vessels">
+                        <span class="tab-icon">🚢</span>
+                        <span class="tab-label">Vessels</span>
+                    </button>
+                    <button class="sidebar-tab" data-view="all-messages" title="Messages">
+                        <span class="tab-icon">📨</span>
+                        <span class="tab-label">Messages</span>
+                    </button>
                 </div>
             </aside>
         </main>
 
         <!-- Bottom charts panel -->
         <div id="charts-panel" class="hidden">
+            <!-- Mobile drag handle -->
+            <div id="charts-handle">
+                <div class="handle-pill"></div>
+            </div>
             <div id="charts-resize"></div>
+            <!-- Mobile chart indicator pills -->
+            <div id="charts-indicators">
+                <button class="chart-pill active" data-chart="speed">Speed</button>
+                <button class="chart-pill" data-chart="course">Course</button>
+                <button class="chart-pill" data-chart="draught">Draught</button>
+            </div>
             <div id="charts-container">
-                <div id="speed-chart-wrapper">
+                <div id="speed-chart-wrapper" data-chart="speed">
                     <div class="chart-label">Speed (kts)</div>
                     <div id="speed-chart"></div>
                 </div>
-                <div id="course-chart-wrapper">
+                <div id="course-chart-wrapper" data-chart="course">
                     <div class="chart-label">Course (°)</div>
                     <div id="course-chart"></div>
                 </div>
-                <div id="draught-chart-wrapper">
+                <div id="draught-chart-wrapper" data-chart="draught">
                     <div class="chart-label">Draught (m)</div>
                     <div id="draught-chart"></div>
                 </div>
             </div>
+            <!-- Mobile time scrubber -->
+            <div id="time-scrubber">
+                <input type="range" id="time-scrubber-input" min="0" max="100" value="100">
+                <div id="time-scrubber-label">Now</div>
+            </div>
             <!-- Highlight info shows when hovering on charts -->
             <div id="highlight-info" class="hidden"></div>
         </div>
+    </div>
+
+    <!-- Mobile global timeline (shown when no vessel selected) -->
+    <div id="mobile-timeline" class="hidden">
+        <div class="mobile-timeline-label">Timeline</div>
+        <input type="range" id="mobile-timeline-slider" min="0" max="100" value="100">
+        <div id="mobile-timeline-value">Now</div>
     </div>
 
     <!-- Settings Modal -->

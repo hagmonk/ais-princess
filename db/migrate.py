@@ -53,6 +53,8 @@ def _drop_decoded_tables(conn: sqlite3.Connection):
     conn.execute("DROP TABLE IF EXISTS vessels")
     conn.execute("DROP TABLE IF EXISTS base_stations")
     conn.execute("DROP TABLE IF EXISTS nav_aids")
+    conn.execute("DROP TABLE IF EXISTS binary_messages")
+    conn.execute("DROP TABLE IF EXISTS safety_messages")
 
     # Reset decoded status so messages get reprocessed
     conn.execute("UPDATE raw_messages SET decoded = 0, decode_error = NULL")
@@ -185,6 +187,44 @@ def migrate(db_path: Path, force_recreate: bool = False):
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_nav_aids_mmsi ON nav_aids(mmsi)")
+
+    # Binary messages table - Type 6, 8, 25, 26
+    print("  Creating binary_messages table...")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS binary_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_message_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            mmsi INTEGER NOT NULL,
+            msg_type INTEGER NOT NULL,
+            dest_mmsi INTEGER,
+            dac INTEGER,
+            fid INTEGER,
+            raw_data TEXT,
+            decoded_json TEXT,
+            FOREIGN KEY (raw_message_id) REFERENCES raw_messages(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_binary_mmsi ON binary_messages(mmsi)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_binary_dac_fid ON binary_messages(dac, fid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_binary_timestamp ON binary_messages(timestamp)")
+
+    # Safety messages table - Type 12, 14
+    print("  Creating safety_messages table...")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS safety_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_message_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            mmsi INTEGER NOT NULL,
+            msg_type INTEGER NOT NULL,
+            dest_mmsi INTEGER,
+            text TEXT,
+            FOREIGN KEY (raw_message_id) REFERENCES raw_messages(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_safety_mmsi ON safety_messages(mmsi)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_safety_timestamp ON safety_messages(timestamp)")
 
     # Latest positions table - trigger-maintained for fast UI loads
     print("  Creating latest_positions table...")

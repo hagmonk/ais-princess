@@ -14,7 +14,9 @@ Usage:
 """
 
 import argparse
+import json
 import sqlite3
+import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -23,6 +25,16 @@ from typing import Optional
 
 from pyais import decode
 from pyais.exceptions import InvalidNMEAMessageException
+
+# Add dac-fid-decoder to path
+DAC_DECODER_PATH = Path(__file__).parent.parent / "dac-fid-decoder" / "src"
+if DAC_DECODER_PATH.exists():
+    sys.path.insert(0, str(DAC_DECODER_PATH))
+    from ais_binary import decode_binary_payload
+    HAS_DAC_DECODER = True
+else:
+    HAS_DAC_DECODER = False
+    decode_binary_payload = None
 
 DEFAULT_DB = Path(__file__).parent / "ais-data.db"
 DEFAULT_BATCH_SIZE = 1000
@@ -39,6 +51,12 @@ BASE_STATION_TYPES = {4, 11}
 
 # Navigation aid type
 NAV_AID_TYPES = {21}
+
+# Binary message types (addressed and broadcast)
+BINARY_TYPES = {6, 8, 25, 26}
+
+# Safety-related message types
+SAFETY_TYPES = {12, 14}
 
 
 class MultiPartBuffer:
@@ -221,12 +239,19 @@ class AISDecoder:
             # Route to appropriate table
             if msg_type in POSITION_TYPES:
                 self._store_position(conn, raw_ids[0], timestamp, data)
+                # Type 19 also has static data (extended Class B CS)
+                if msg_type == 19:
+                    self._store_type19_static(conn, timestamp, data)
             elif msg_type in STATIC_TYPES:
                 self._store_vessel(conn, timestamp, data)
             elif msg_type in BASE_STATION_TYPES:
                 self._store_base_station(conn, raw_ids[0], timestamp, data)
             elif msg_type in NAV_AID_TYPES:
                 self._store_nav_aid(conn, raw_ids[0], timestamp, data)
+            elif msg_type in BINARY_TYPES:
+                self._store_binary_message(conn, raw_ids[0], timestamp, data)
+            elif msg_type in SAFETY_TYPES:
+                self._store_safety_message(conn, raw_ids[0], timestamp, data)
             else:
                 # Other message types - just mark as decoded, no storage
                 self.stats["other"] += 1
@@ -446,6 +471,120 @@ class AISDecoder:
         )
         self.stats["nav_aids"] += 1
 
+    def _store_binary_message(
+        self, conn: sqlite3.Connection, raw_id: int, timestamp: str, data: dict
+    ):
+        """Store binary message (Types 6, 8, 25, 26)."""
+        mmsi = data.get("mmsi")
+        msg_type = data.get("msg_type")
+
+        # Extract DAC and FID for addressed/broadcast messages
+        dac = data.get("dac")
+        fid = data.get("fid")
+        dest_mmsi = data.get("dest_mmsi")  # Type 6 only
+
+        # Get raw binary data
+        raw_data = data.get("data", "")
+        if isinstance(raw_data, (bytes, bytearray)):
+            raw_data = raw_data.hex()
+
+        # Try to decode payload using dac-fid-decoder
+        decoded_json = None
+        if HAS_DAC_DECODER and dac is not None and fid is not None:
+            try:
+                decoded = decode_binary_payload(dac, fid, raw_data)
+                if decoded:
+                    decoded_json = json.dumps(decoded)
+            except Exception:
+                # Decoding failed, store raw only
+                pass
+
+        conn.execute(
+            """
+            INSERT INTO binary_messages (
+                raw_message_id, timestamp, mmsi, msg_type,
+                dest_mmsi, dac, fid, raw_data, decoded_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                raw_id,
+                timestamp,
+                mmsi,
+                msg_type,
+                dest_mmsi,
+                dac,
+                fid,
+                raw_data,
+                decoded_json,
+            ),
+        )
+        self.stats["binary_messages"] += 1
+
+    def _store_safety_message(
+        self, conn: sqlite3.Connection, raw_id: int, timestamp: str, data: dict
+    ):
+        """Store safety-related message (Types 12, 14)."""
+        mmsi = data.get("mmsi")
+        msg_type = data.get("msg_type")
+        dest_mmsi = data.get("dest_mmsi")  # Type 12 only (addressed)
+        text = data.get("text", "")
+
+        conn.execute(
+            """
+            INSERT INTO safety_messages (
+                raw_message_id, timestamp, mmsi, msg_type, dest_mmsi, text
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                raw_id,
+                timestamp,
+                mmsi,
+                msg_type,
+                dest_mmsi,
+                text,
+            ),
+        )
+        self.stats["safety_messages"] += 1
+
+    def _store_type19_static(
+        self, conn: sqlite3.Connection, timestamp: str, data: dict
+    ):
+        """Extract and store static data from Type 19 (Extended Class B CS)."""
+        mmsi = data.get("mmsi")
+
+        # Type 19 has shipname, ship_type, and dimensions
+        conn.execute(
+            """
+            INSERT INTO vessels (
+                mmsi, shipname, ship_type,
+                to_bow, to_stern, to_port, to_starboard,
+                epfd, first_seen, last_seen, static_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(mmsi) DO UPDATE SET
+                shipname = COALESCE(excluded.shipname, shipname),
+                ship_type = COALESCE(excluded.ship_type, ship_type),
+                to_bow = COALESCE(excluded.to_bow, to_bow),
+                to_stern = COALESCE(excluded.to_stern, to_stern),
+                to_port = COALESCE(excluded.to_port, to_port),
+                to_starboard = COALESCE(excluded.to_starboard, to_starboard),
+                epfd = COALESCE(excluded.epfd, epfd),
+                last_seen = excluded.last_seen,
+                static_count = static_count + 1
+            """,
+            (
+                mmsi,
+                data.get("shipname"),
+                data.get("ship_type"),
+                data.get("to_bow"),
+                data.get("to_stern"),
+                data.get("to_port"),
+                data.get("to_starboard"),
+                data.get("epfd"),
+                timestamp,
+                timestamp,
+            ),
+        )
+
     def print_stats(self):
         """Print decoding statistics."""
         print("\nDecoding statistics:")
@@ -496,7 +635,7 @@ def run_once(decoder: AISDecoder):
     # Print summary
     conn = sqlite3.connect(str(decoder.db_path))
     print("\nDatabase summary:")
-    for table in ["positions", "vessels", "base_stations", "nav_aids", "latest_positions"]:
+    for table in ["positions", "vessels", "base_stations", "nav_aids", "binary_messages", "safety_messages", "latest_positions"]:
         count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         print(f"  {table}: {count}")
 

@@ -22,6 +22,8 @@ from pathlib import Path
 
 import aiosqlite
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -32,20 +34,221 @@ STATIC_PATH = Path(__file__).parent / "static"
 POLL_INTERVAL = 0.5  # 500ms - poll positions table
 
 
+# ============================================================================
+# Port Resolution
+# ============================================================================
+
+def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate great circle distance in nautical miles."""
+    import math
+    R = 3440.065  # Earth radius in nautical miles
+    dLat = math.radians(lat2 - lat1)
+    dLon = math.radians(lon2 - lon1)
+    a = (math.sin(dLat / 2) ** 2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+         math.sin(dLon / 2) ** 2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
+async def find_nearest_seaport(db: aiosqlite.Connection, lat: float, lon: float, limit_km: float = 100) -> dict | None:
+    """Find the nearest seaport (WPI or LOCODE) to given coordinates.
+
+    Uses a bounding box for initial filtering, then calculates actual distances.
+    Only considers ports with source='wpi' or source='locode' (not airports).
+    """
+    import math
+    # Approximate degrees per km at this latitude
+    km_per_deg_lat = 111.0
+    km_per_deg_lon = 111.0 * abs(math.cos(lat * math.pi / 180))
+
+    # Bounding box (generous to catch nearby ports)
+    lat_delta = limit_km / km_per_deg_lat
+    lon_delta = limit_km / km_per_deg_lon if km_per_deg_lon > 0 else limit_km / 111.0
+
+    async with db.execute(
+        """SELECT locode, name, country, lat, lon, source,
+                  ((?1 - lat) * (?1 - lat) + (?2 - lon) * (?2 - lon)) as dist_sq
+           FROM ports
+           WHERE source IN ('wpi', 'locode')
+             AND lat BETWEEN ?1 - ?3 AND ?1 + ?3
+             AND lon BETWEEN ?2 - ?4 AND ?2 + ?4
+           ORDER BY dist_sq ASC
+           LIMIT 1""",
+        (lat, lon, lat_delta, lon_delta)
+    ) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            # Calculate actual distance
+            port_lat, port_lon = row[3], row[4]
+            distance_nm = calculate_distance(lat, lon, port_lat, port_lon)
+            return {
+                "locode": row[0],
+                "name": row[1],
+                "country": row[2],
+                "lat": port_lat,
+                "lon": port_lon,
+                "source": row[5],
+                "distance_from_reference_nm": round(distance_nm, 1),
+            }
+    return None
+
+
+async def resolve_destination(db: aiosqlite.Connection, destination: str) -> dict | None:
+    """
+    Resolve an AIS destination field to port coordinates.
+
+    Resolution priority:
+    1. Exact UN/LOCODE match
+    2. Fuzzy match on port name
+    3. Partial match on port name
+
+    If the match is an airport (source='iata'), snaps to the nearest seaport
+    since ships can't dock at airports.
+    """
+    if not destination:
+        return None
+
+    # Clean destination string
+    dest_clean = destination.strip().upper().replace(' ', '')
+    dest_words = destination.strip().upper()
+
+    result = None
+
+    # 1. Exact locode match (e.g., "USLAX", "USHNL")
+    async with db.execute(
+        "SELECT locode, name, country, lat, lon, source FROM ports WHERE locode = ?",
+        (dest_clean,)
+    ) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            result = {
+                "locode": row[0],
+                "name": row[1],
+                "country": row[2],
+                "lat": row[3],
+                "lon": row[4],
+                "source": row[5],
+                "match_type": "exact_locode",
+            }
+
+    # 2. Try first 5 chars as locode (common in AIS)
+    if not result and len(dest_clean) >= 5:
+        async with db.execute(
+            "SELECT locode, name, country, lat, lon, source FROM ports WHERE locode = ?",
+            (dest_clean[:5],)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                result = {
+                    "locode": row[0],
+                    "name": row[1],
+                    "country": row[2],
+                    "lat": row[3],
+                    "lon": row[4],
+                    "source": row[5],
+                    "match_type": "prefix_locode",
+                }
+
+    # 3. Exact name match (case insensitive)
+    if not result:
+        async with db.execute(
+            "SELECT locode, name, country, lat, lon, source FROM ports WHERE UPPER(name) = ? OR UPPER(name_ascii) = ?",
+            (dest_words, dest_words)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                result = {
+                    "locode": row[0],
+                    "name": row[1],
+                    "country": row[2],
+                    "lat": row[3],
+                    "lon": row[4],
+                    "source": row[5],
+                    "match_type": "exact_name",
+                }
+
+    # 4. Partial name match (starts with destination)
+    if not result:
+        async with db.execute(
+            """SELECT locode, name, country, lat, lon, source FROM ports
+               WHERE UPPER(name) LIKE ? OR UPPER(name_ascii) LIKE ?
+               ORDER BY LENGTH(name) ASC LIMIT 1""",
+            (f"{dest_words}%", f"{dest_words}%")
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                result = {
+                    "locode": row[0],
+                    "name": row[1],
+                    "country": row[2],
+                    "lat": row[3],
+                    "lon": row[4],
+                    "source": row[5],
+                    "match_type": "prefix_name",
+                }
+
+    # 5. Contains match (destination contains port name or vice versa)
+    if not result:
+        async with db.execute(
+            """SELECT locode, name, country, lat, lon, source FROM ports
+               WHERE UPPER(name) LIKE ? OR ? LIKE '%' || UPPER(name) || '%'
+               ORDER BY source ASC, LENGTH(name) DESC LIMIT 1""",
+            (f"%{dest_words}%", dest_words)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                result = {
+                    "locode": row[0],
+                    "name": row[1],
+                    "country": row[2],
+                    "lat": row[3],
+                    "lon": row[4],
+                    "source": row[5],
+                    "match_type": "contains",
+                }
+
+    # If we matched an airport, snap to nearest seaport (ships can't dock at airports)
+    if result and result["source"] == "iata":
+        airport_info = {
+            "name": result["name"],
+            "locode": result["locode"],
+            "lat": result["lat"],
+            "lon": result["lon"],
+        }
+        nearest = await find_nearest_seaport(db, result["lat"], result["lon"])
+        if nearest:
+            result = nearest
+            result["match_type"] = "snapped_from_airport"
+            result["airport_reference"] = airport_info
+        # If no nearby seaport found, keep the airport as a rough location
+
+    return result
+
+
 class ConnectionManager:
     """Manages WebSocket connections"""
 
     def __init__(self):
         self.active_connections: set[WebSocket] = set()
+        self._initializing: set[WebSocket] = set()  # Clients receiving history
 
-    async def connect(self, websocket: WebSocket):
+    async def accept(self, websocket: WebSocket):
+        """Accept connection but don't add to broadcast list yet"""
         await websocket.accept()
+        self._initializing.add(websocket)
+        print(f"Client accepted (initializing). Total active: {len(self.active_connections)}")
+
+    def activate(self, websocket: WebSocket):
+        """Move client from initializing to active (ready for broadcasts)"""
+        self._initializing.discard(websocket)
         self.active_connections.add(websocket)
-        print(f"Client connected. Total: {len(self.active_connections)}")
+        print(f"Client activated. Total active: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
+        self._initializing.discard(websocket)
         self.active_connections.discard(websocket)
-        print(f"Client disconnected. Total: {len(self.active_connections)}")
+        print(f"Client disconnected. Total active: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict):
         """Broadcast message to all connected clients"""
@@ -190,6 +393,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AIS Vessel Tracker", lifespan=lifespan)
 
+# Add GZip compression for large responses (e.g., track data)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Add CORS middleware (needed for WebSocket connections from different origins)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for local network access
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
@@ -256,7 +470,7 @@ async def get_vessels():
 
 @app.get("/api/vessel/{mmsi}")
 async def get_vessel(mmsi: int):
-    """Return vessel details including latest position"""
+    """Return vessel details including latest position and resolved destination"""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
@@ -281,16 +495,33 @@ async def get_vessel(mmsi: int):
         if position_row:
             result.update(row_to_dict(position_row))
 
+        # Resolve destination if present
+        destination = result.get("destination")
+        if destination:
+            resolved = await resolve_destination(db, destination)
+            if resolved:
+                result["destination_port"] = resolved
+                # Calculate distance and ETA if we have vessel position and speed
+                lat = result.get("lat")
+                lon = result.get("lon")
+                speed = result.get("speed")
+                if lat is not None and lon is not None:
+                    distance = calculate_distance(lat, lon, resolved["lat"], resolved["lon"])
+                    result["destination_distance_nm"] = round(distance, 1)
+                    if speed and speed > 0:
+                        eta_hours = distance / speed
+                        result["destination_eta_hours"] = round(eta_hours, 1)
+
         return result
 
 
 @app.get("/api/vessel/{mmsi}/track")
 async def get_vessel_track(
     mmsi: int,
-    limit: int = Query(default=None),
-    hours: int = Query(default=None)
+    limit: int = Query(default=None, description="Max positions to return"),
+    hours: int = Query(default=None, description="Hours of history")
 ):
-    """Return position history for a specific vessel (all positions by default)"""
+    """Return position history for a specific vessel"""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
@@ -317,6 +548,106 @@ async def get_vessel_track(
 
     positions = [row_to_dict(row) for row in rows]
     return {"mmsi": mmsi, "positions": positions, "count": len(positions)}
+
+
+@app.get("/api/vessel/{mmsi}/messages")
+async def get_vessel_messages(
+    mmsi: int,
+    limit: int = Query(default=100),
+    offset: int = Query(default=0),
+    hours: int = Query(default=None, description="Filter to last N hours. Omit for all time."),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+):
+    """Return all message types for a specific vessel with pagination and sorting"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Build time filter condition
+        time_filter = ""
+        time_param = None
+        if hours is not None and hours > 0:
+            time_filter = "AND timestamp > datetime('now', ?)"
+            time_param = f"-{hours} hours"
+
+        # Count total messages for pagination
+        total = 0
+        for table, extra_cols in [
+            ("positions", ""),
+            ("binary_messages", ""),
+            ("safety_messages", ""),
+        ]:
+            count_query = f"SELECT COUNT(*) FROM {table} WHERE mmsi = ? {time_filter}"
+            params = [mmsi] if not time_param else [mmsi, time_param]
+            async with db.execute(count_query, params) as cursor:
+                row = await cursor.fetchone()
+                total += row[0] if row else 0
+
+        messages = []
+
+        # Determine order direction
+        order_dir = "ASC" if sort_order == "asc" else "DESC"
+
+        # Get position messages
+        query = f"""
+            SELECT id, raw_message_id, timestamp, msg_type, lat, lon, speed, course, heading, nav_status
+            FROM positions
+            WHERE mmsi = ? {time_filter}
+            ORDER BY timestamp {order_dir}
+        """
+        params = [mmsi] if not time_param else [mmsi, time_param]
+        async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
+                msg = row_to_dict(row)
+                msg["message_type"] = "position"
+                msg["mmsi"] = mmsi
+                messages.append(msg)
+
+        # Get binary messages
+        query = f"""
+            SELECT id, raw_message_id, timestamp, msg_type, dest_mmsi, dac, fid, decoded_json
+            FROM binary_messages
+            WHERE mmsi = ? {time_filter}
+            ORDER BY timestamp {order_dir}
+        """
+        async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
+                msg = row_to_dict(row)
+                msg["message_type"] = "binary"
+                msg["mmsi"] = mmsi
+                messages.append(msg)
+
+        # Get safety messages
+        query = f"""
+            SELECT id, raw_message_id, timestamp, msg_type, dest_mmsi, text
+            FROM safety_messages
+            WHERE mmsi = ? {time_filter}
+            ORDER BY timestamp {order_dir}
+        """
+        async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
+                msg = row_to_dict(row)
+                msg["message_type"] = "safety"
+                msg["mmsi"] = mmsi
+                messages.append(msg)
+
+        # Sort all messages by timestamp
+        reverse = sort_order == "desc"
+        messages.sort(key=lambda m: m.get("timestamp", ""), reverse=reverse)
+
+        # Apply pagination
+        paginated = messages[offset:offset + limit]
+
+    return {
+        "mmsi": mmsi,
+        "messages": paginated,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total,
+    }
 
 
 @app.get("/api/stats")
@@ -372,13 +703,107 @@ async def get_timerange():
         return {"oldest": None, "newest": None}
 
 
+@app.get("/api/ports/resolve")
+async def resolve_port(destination: str = Query(..., description="Destination string to resolve")):
+    """Resolve an AIS destination string to port coordinates."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        result = await resolve_destination(db, destination)
+
+        if result:
+            return {
+                "resolved": True,
+                "destination": destination,
+                "port": result,
+            }
+        return {
+            "resolved": False,
+            "destination": destination,
+            "port": None,
+        }
+
+
+@app.get("/api/ports/search")
+async def search_ports(
+    q: str = Query(..., min_length=2, description="Search query"),
+    limit: int = Query(default=20, le=100),
+):
+    """Search ports by name or locode."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        query = q.strip().upper()
+
+        async with db.execute(
+            """SELECT locode, name, country, lat, lon, source
+               FROM ports
+               WHERE locode LIKE ? OR UPPER(name) LIKE ? OR UPPER(name_ascii) LIKE ?
+               ORDER BY
+                   CASE WHEN locode = ? THEN 0
+                        WHEN locode LIKE ? THEN 1
+                        WHEN UPPER(name) = ? THEN 2
+                        ELSE 3
+                   END,
+                   source ASC,
+                   name ASC
+               LIMIT ?""",
+            (f"{query}%", f"%{query}%", f"%{query}%", query, f"{query}%", query, limit)
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        ports = [
+            {
+                "locode": row["locode"],
+                "name": row["name"],
+                "country": row["country"],
+                "lat": row["lat"],
+                "lon": row["lon"],
+                "source": row["source"],
+            }
+            for row in rows
+        ]
+
+        return {"query": q, "ports": ports, "count": len(ports)}
+
+
+@app.get("/api/ports/stats")
+async def get_port_stats():
+    """Return port database statistics."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Check if ports table exists
+        async with db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='ports'"
+        ) as cursor:
+            if not await cursor.fetchone():
+                return {"error": "Port database not initialized. Run: uv run db/sync_ports.py"}
+
+        async with db.execute("SELECT COUNT(*) FROM ports") as cursor:
+            total = (await cursor.fetchone())[0]
+
+        async with db.execute("SELECT COUNT(*) FROM ports WHERE source = 'wpi'") as cursor:
+            wpi_count = (await cursor.fetchone())[0]
+
+        async with db.execute("SELECT COUNT(*) FROM ports WHERE source = 'locode'") as cursor:
+            locode_count = (await cursor.fetchone())[0]
+
+        return {
+            "total": total,
+            "wpi": wpi_count,
+            "locode": locode_count,
+            "initialized": total > 0,
+        }
+
+
 @app.websocket("/ws/ais")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time AIS data"""
-    await manager.connect(websocket)
+    # Accept connection but don't add to broadcast list yet
+    await manager.accept(websocket)
 
-    # Send historical data to this client
+    # Send historical data to this client (broadcasts won't interfere)
     await send_history(websocket)
+
+    # Now add to broadcast list - client is ready for real-time updates
+    manager.activate(websocket)
 
     try:
         # Keep connection alive - just wait for disconnect
@@ -404,7 +829,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="AIS Vessel Tracker")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="Database path")
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind")
     args = parser.parse_args()
 

@@ -205,7 +205,7 @@ html, body {
 }
 
 /* ============================================================================
-   Sidebar (split into top and bottom)
+   Sidebar - Hierarchical Navigation
    ============================================================================ */
 
 #sidebar {
@@ -218,41 +218,260 @@ html, body {
     border-left: 1px solid var(--border);
 }
 
-/* Top panel - vessel/message list */
-#sidebar-top {
+/* Navigation header with back button and title */
+#sidebar-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border);
+    min-height: 44px;
+}
+
+#nav-back {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+#nav-back:hover {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+}
+
+#nav-back.hidden {
+    display: none;
+}
+
+#nav-title {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* View container - holds all sidebar views */
+#sidebar-views {
     flex: 1;
     display: flex;
     flex-direction: column;
-    min-height: 150px;
+    overflow: hidden;
+    position: relative;
+}
+
+/* Individual views */
+.sidebar-view {
+    display: none;
+    flex-direction: column;
+    height: 100%;
     overflow: hidden;
 }
 
-/* List tabs (Vessels / Messages) */
-#list-tabs {
+.sidebar-view.active {
     display: flex;
-    border-bottom: 1px solid var(--border);
 }
 
-.list-tab {
-    flex: 1;
-    padding: 8px;
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    color: var(--text-secondary);
-    font-size: 11px;
-    cursor: pointer;
-}
-
-.list-tab:hover {
+/* Bottom tabs for quick navigation */
+#sidebar-tabs {
+    display: flex;
+    border-top: 1px solid var(--border);
     background: var(--bg-tertiary);
 }
 
-.list-tab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
+.sidebar-tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 8px 4px;
+    background: none;
+    border: none;
+    border-top: 2px solid transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
 }
 
+.sidebar-tab:hover {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.sidebar-tab.active {
+    color: var(--accent);
+    border-top-color: var(--accent);
+    background: var(--bg-primary);
+}
+
+.tab-icon {
+    font-size: 16px;
+}
+
+.tab-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+/* Detail actions - drill-down buttons */
+.detail-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid var(--border);
+    margin-top: auto;
+}
+
+.action-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.action-btn:hover {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+}
+
+.action-btn-inline {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    justify-content: center;
+}
+
+.action-btn-inline:hover {
+    background: var(--accent);
+    color: var(--bg-primary);
+}
+
+.action-icon {
+    font-size: 16px;
+}
+
+.action-arrow {
+    margin-left: auto;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+/* Vessel messages view */
+#vessel-messages-controls {
+    display: flex;
+    gap: 8px;
+    padding: 8px;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border);
+}
+
+#vessel-messages-search {
+    flex: 1;
+}
+
+#vessel-messages-search-input {
+    width: 100%;
+    padding: 6px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+#vessel-messages-search-input::placeholder {
+    color: var(--text-muted);
+}
+
+#vessel-messages-hours {
+    padding: 6px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+#vessel-messages-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+#vessel-messages-sort-hint {
+    font-style: italic;
+    color: var(--text-muted);
+}
+
+#vessel-messages-table {
+    flex: 1;
+    overflow: auto;
+}
+
+#vessel-messages-pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    padding: 8px;
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border);
+}
+
+#vessel-messages-pagination button {
+    padding: 6px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+#vessel-messages-pagination button:hover:not(:disabled) {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+}
+
+#vessel-messages-pagination button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#vessel-messages-page-info {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* Legacy list-content classes for backwards compatibility */
 .list-content {
     display: none;
     flex: 1;
@@ -339,71 +558,11 @@ html, body {
     overflow: auto;
 }
 
-/* Sidebar split handle */
-#sidebar-split {
-    height: 5px;
-    cursor: ns-resize;
-    background: var(--border);
-    transition: background 0.2s;
-    flex-shrink: 0;
-}
-
-#sidebar-split:hover,
-#sidebar-split.resizing {
-    background: var(--accent);
-}
-
-/* Bottom panel - details */
-#sidebar-bottom {
-    height: 250px;
-    min-height: 100px;
-    max-height: 70%;
-    display: flex;
-    flex-direction: column;
-    border-top: 1px solid var(--border);
-    overflow: hidden;
-}
-
-#sidebar-bottom.hidden {
-    display: none;
-}
-
-#detail-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    background: var(--bg-tertiary);
-    border-bottom: 1px solid var(--border);
-}
-
-#detail-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--accent);
-}
-
-#close-details {
-    background: none;
-    border: none;
-    color: var(--text-secondary);
-    font-size: 18px;
-    cursor: pointer;
-    padding: 0 5px;
-}
-
-#close-details:hover {
-    color: var(--text-primary);
-}
-
-#detail-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 10px;
-}
-
 /* Vessel details */
 #vessel-details {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
     font-size: 12px;
 }
 
@@ -478,6 +637,41 @@ html, body {
 .message-field-value {
     color: var(--text-primary);
     font-family: monospace;
+}
+
+/* Decoded binary message section */
+.decoded-section {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+}
+
+.decoded-section h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+    letter-spacing: 0.5px;
+}
+
+.decoded-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.decoded-section .message-field {
+    padding: 3px 0;
+}
+
+.decoded-error {
+    opacity: 0.7;
+}
+
+.decoded-note {
+    font-size: 10px;
+    color: var(--text-secondary);
+    font-style: italic;
 }
 
 /* ============================================================================
@@ -563,6 +757,26 @@ html, body {
     display: none;
 }
 
+/* Mobile chart handle (iOS-style drag indicator) */
+#charts-handle {
+    display: none;  /* Hidden on desktop */
+}
+
+/* Chart indicator pills (hidden on desktop) */
+#charts-indicators {
+    display: none;  /* Hidden on desktop */
+}
+
+/* Time scrubber (hidden on desktop) */
+#time-scrubber {
+    display: none;  /* Hidden on desktop */
+}
+
+/* Mobile global timeline (hidden on desktop) */
+#mobile-timeline {
+    display: none;  /* Hidden on desktop */
+}
+
 /* uPlot dark theme */
 .uplot {
     font-family: inherit;
@@ -591,37 +805,59 @@ html, body {
    ============================================================================ */
 
 .tabulator {
-    background: transparent;
-    border: none;
+    background: var(--bg-secondary) !important;
+    border: none !important;
     font-size: 11px;
 }
 
 .tabulator .tabulator-header {
-    background: var(--bg-tertiary);
-    border-bottom: 1px solid var(--border);
+    background: var(--bg-tertiary) !important;
+    border-bottom: 1px solid var(--border) !important;
+    color: var(--text-secondary) !important;
 }
 
 .tabulator .tabulator-header .tabulator-col {
-    background: transparent;
-    border-right: none;
+    background: transparent !important;
+    border-right: none !important;
+    color: var(--text-secondary) !important;
+}
+
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable:hover {
+    background: var(--bg-primary) !important;
+}
+
+.tabulator .tabulator-tableholder {
+    background: var(--bg-secondary) !important;
 }
 
 .tabulator .tabulator-row {
-    background: transparent;
-    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary) !important;
+    border-bottom: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+}
+
+.tabulator .tabulator-row.tabulator-row-even {
+    background: rgba(15, 52, 96, 0.3) !important;  /* Subtle alternating row */
 }
 
 .tabulator .tabulator-row:hover {
-    background: var(--bg-tertiary);
+    background: var(--bg-tertiary) !important;
 }
 
 .tabulator .tabulator-row.tabulator-selected {
-    background: var(--accent-dim);
+    background: var(--accent-dim) !important;
+    color: var(--text-primary) !important;
+}
+
+.tabulator .tabulator-row.tabulator-selected:hover {
+    background: var(--accent) !important;
+    color: #000 !important;
 }
 
 .tabulator .tabulator-cell {
-    border-right: none;
+    border-right: none !important;
     padding: 6px 8px;
+    color: inherit !important;
 }
 
 /* ============================================================================
@@ -1055,50 +1291,180 @@ html, body {
         display: block;
     }
 
-    /* Close button in sidebar header */
+    /* Close button in sidebar nav header */
     #sidebar-close {
-        display: block;
-        position: absolute;
-        top: 8px;
-        right: 10px;
-        background: none;
-        border: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        background: var(--bg-primary);
+        border: 1px solid var(--border);
+        border-radius: 4px;
         color: var(--text-secondary);
-        font-size: 24px;
+        font-size: 20px;
         cursor: pointer;
-        z-index: 10;
-        padding: 5px;
+        margin-left: auto;
     }
 
     #sidebar-close:hover {
         color: var(--text-primary);
+        background: var(--accent-dim);
     }
 
-    /* Sidebar top needs padding for close button */
-    #list-tabs {
-        padding-right: 40px;
+    /* Adjust sidebar tabs for mobile */
+    #sidebar-tabs {
+        padding-bottom: env(safe-area-inset-bottom, 0);
     }
 
-    /* Charts panel adjustments */
+    /* iOS-style bottom sheet for charts */
     #charts-panel {
-        height: 120px;
-        min-height: 80px;
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        height: 33vh !important;
+        min-height: 200px !important;
+        max-height: 50vh !important;
+        background: var(--bg-secondary) !important;
+        border-top: none !important;
+        border-radius: 16px 16px 0 0 !important;
+        box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4) !important;
+        z-index: 1000 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        padding-bottom: env(safe-area-inset-bottom, 0) !important;
+        /* Use visibility + transform for smooth animation */
+        transform: translateY(0);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
+    #charts-panel.hidden {
+        display: flex !important;  /* Keep flex, use transform to hide */
+        transform: translateY(100%) !important;
+        pointer-events: none;
+    }
+
+    /* iOS-style drag handle */
+    #charts-handle {
+        display: flex;
+        justify-content: center;
+        padding: 8px 0 4px 0;
+        cursor: grab;
+    }
+
+    #charts-handle .handle-pill {
+        width: 36px;
+        height: 5px;
+        background: var(--text-secondary);
+        border-radius: 3px;
+        opacity: 0.5;
+    }
+
+    /* Hide desktop resize handle */
+    #charts-resize {
+        display: none;
+    }
+
+    /* Chart indicator pills */
+    #charts-indicators {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        padding: 8px 16px;
+        flex-shrink: 0;
+    }
+
+    .chart-pill {
+        padding: 6px 16px;
+        font-size: 13px;
+        font-weight: 500;
+        background: var(--bg-tertiary);
+        border: none;
+        border-radius: 16px;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .chart-pill.active {
+        background: var(--accent);
+        color: var(--bg-primary);
+    }
+
+    /* Horizontal scroll snap for charts */
     #charts-container {
-        flex-direction: column;
+        flex: 1;
+        display: flex;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scroll-snap-type: x mandatory;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        gap: 0;
+        background: var(--bg-primary);
+    }
+
+    #charts-container::-webkit-scrollbar {
+        display: none;
     }
 
     #speed-chart-wrapper,
     #course-chart-wrapper,
     #draught-chart-wrapper {
-        min-height: 80px;
+        flex: 0 0 100%;
+        min-width: 100%;
+        scroll-snap-align: center;
+        display: flex !important;  /* Override desktop hiding */
+        min-height: 0;
     }
 
-    /* Only show one chart at a time on mobile */
-    #course-chart-wrapper,
-    #draught-chart-wrapper {
-        display: none;
+    .chart-label {
+        display: none;  /* Labels shown in pills instead */
+    }
+
+    /* Time scrubber */
+    #time-scrubber {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 16px 12px 16px;
+        background: var(--bg-secondary);
+        flex-shrink: 0;
+    }
+
+    #time-scrubber-input {
+        flex: 1;
+        height: 4px;
+        -webkit-appearance: none;
+        appearance: none;
+        background: var(--bg-tertiary);
+        border-radius: 2px;
+        outline: none;
+    }
+
+    #time-scrubber-input::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 20px;
+        height: 20px;
+        background: var(--accent);
+        border-radius: 50%;
+        cursor: pointer;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    }
+
+    #time-scrubber-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        min-width: 80px;
+        text-align: right;
+    }
+
+    /* Move highlight info to top of sheet */
+    #highlight-info {
+        top: 50px;
     }
 
     /* Type filters scroll horizontally */
@@ -1132,6 +1498,62 @@ html, body {
         width: 95%;
         max-height: 90vh;
         overflow-y: auto;
+    }
+
+    /* Mobile global timeline - shown when no vessel selected */
+    #mobile-timeline {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+        background: var(--bg-secondary);
+        border-top: 1px solid var(--border);
+        z-index: 100;
+    }
+
+    #mobile-timeline.hidden {
+        display: none;
+    }
+
+    .mobile-timeline-label {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--accent);
+        flex-shrink: 0;
+    }
+
+    #mobile-timeline-slider {
+        flex: 1;
+        height: 4px;
+        -webkit-appearance: none;
+        appearance: none;
+        background: var(--bg-tertiary);
+        border-radius: 2px;
+        outline: none;
+    }
+
+    #mobile-timeline-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 24px;
+        height: 24px;
+        background: var(--accent);
+        border-radius: 50%;
+        cursor: pointer;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    }
+
+    #mobile-timeline-value {
+        font-size: 12px;
+        color: var(--text-secondary);
+        min-width: 80px;
+        text-align: right;
+        flex-shrink: 0;
     }
 }
 
