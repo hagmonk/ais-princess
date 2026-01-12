@@ -314,104 +314,142 @@ async def detect_port_visits(db: aiosqlite.Connection, mmsi: int) -> list[dict]:
     return visits
 
 
-async def detect_voyage_segments(db: aiosqlite.Connection, mmsi: int) -> list[dict]:
-    """Detect voyage segments by grouping track points with the same destination."""
+async def detect_voyage_segments(
+    db: aiosqlite.Connection, mmsi: int, port_stops: list[dict] | None = None
+) -> list[dict]:
+    """Detect voyage segments as track points BETWEEN port stops.
 
-    # Get all positions with destination info
-    query = """
-    SELECT
-        p.timestamp, p.lat, p.lon, p.speed, p.course,
-        v.destination
-    FROM positions p
-    LEFT JOIN vessels v ON p.mmsi = v.mmsi
-    WHERE p.mmsi = ?
-    ORDER BY p.timestamp
+    A voyage is defined as all track points between:
+    - Departure from one port and arrival at the next port
+    - Or from track start to first port arrival
+    - Or from last port departure to current position (voyage in progress)
     """
+    from datetime import datetime
 
+    # Get port stops if not provided (sorted by arrival ASC for processing)
+    if port_stops is None:
+        port_stops = await detect_port_visits(db, mmsi)
+
+    # Sort port stops by arrival time (ascending - oldest first)
+    port_stops = sorted(port_stops, key=lambda p: p["arrival"])
+
+    # Get all track points sorted by timestamp
+    query = """
+    SELECT timestamp, lat, lon, speed, course
+    FROM positions
+    WHERE mmsi = ?
+    ORDER BY timestamp
+    """
     async with db.execute(query, (mmsi,)) as cursor:
         rows = await cursor.fetchall()
 
     if not rows:
         return []
 
-    # Group consecutive positions by destination
-    segments = []
-    current_dest = None
-    current_segment = []
+    track_points = [
+        {"timestamp": r[0], "lat": r[1], "lon": r[2], "speed": r[3], "course": r[4]}
+        for r in rows
+    ]
 
-    for row in rows:
-        timestamp, lat, lon, speed, course, dest = row
-        dest = dest.strip() if dest else None
+    def parse_ts(ts_str: str) -> datetime:
+        """Parse timestamp string to datetime."""
+        if ts_str.endswith("+00:00"):
+            ts_str = ts_str[:-6]
+        elif ts_str.endswith("Z"):
+            ts_str = ts_str[:-1]
+        return datetime.fromisoformat(ts_str)
 
-        if dest != current_dest:
-            # Save previous segment if it exists
-            if current_segment and current_dest:
-                segments.append({
-                    "destination": current_dest,
-                    "points": current_segment
-                })
-            # Start new segment
-            current_dest = dest
-            current_segment = []
+    def compute_segment_stats(points: list[dict], from_port: dict | None, to_port: dict | None) -> dict:
+        """Compute statistics for a voyage segment."""
+        if len(points) < 2:
+            return None
 
-        current_segment.append({
-            "timestamp": timestamp,
-            "lat": lat,
-            "lon": lon,
-            "speed": speed,
-            "course": course
-        })
-
-    # Don't forget last segment
-    if current_segment and current_dest:
-        segments.append({
-            "destination": current_dest,
-            "points": current_segment
-        })
-
-    # Process segments to compute stats and resolve destinations
-    result = []
-    for seg in segments:
-        if len(seg["points"]) < 2:
-            continue
-
-        points = seg["points"]
         start_time = points[0]["timestamp"]
         end_time = points[-1]["timestamp"]
 
-        # Calculate duration
-        from datetime import datetime
+        # Duration
         try:
-            start_dt = datetime.fromisoformat(start_time.replace("+00:00", ""))
-            end_dt = datetime.fromisoformat(end_time.replace("+00:00", ""))
+            start_dt = parse_ts(start_time)
+            end_dt = parse_ts(end_time)
             duration_hours = (end_dt - start_dt).total_seconds() / 3600
         except:
             duration_hours = 0
 
-        # Calculate average speed (exclude zeros)
-        speeds = [p["speed"] for p in points if p["speed"] and p["speed"] > 0]
+        # Average speed (exclude zeros and stopped)
+        speeds = [p["speed"] for p in points if p["speed"] and p["speed"] > 0.5]
         avg_speed = sum(speeds) / len(speeds) if speeds else 0
 
-        # Get midpoint for marker placement
+        # Midpoint for marker placement
         mid_idx = len(points) // 2
         mid_point = points[mid_idx]
 
-        # Resolve destination port
-        dest_port = await resolve_destination(db, seg["destination"])
-
-        result.append({
-            "destination_code": seg["destination"],
-            "destination_port": dest_port,
+        return {
+            "from_port": from_port,
+            "to_port": to_port,
             "start_time": start_time,
             "end_time": end_time,
             "duration_hours": round(duration_hours, 1),
             "avg_speed": round(avg_speed, 1),
             "point_count": len(points),
             "midpoint_lat": mid_point["lat"],
-            "midpoint_lon": mid_point["lon"]
-        })
+            "midpoint_lon": mid_point["lon"],
+            "in_progress": to_port is None
+        }
 
-    return result
+    voyages = []
+
+    if not port_stops:
+        # No port stops - entire track is one voyage in progress
+        stats = compute_segment_stats(track_points, None, None)
+        if stats:
+            stats["in_progress"] = True
+            voyages.append(stats)
+        return voyages
+
+    # Build voyage segments between port stops
+    track_idx = 0
+    num_points = len(track_points)
+
+    for i, port in enumerate(port_stops):
+        port_arrival = parse_ts(port["arrival"])
+        port_departure = parse_ts(port["departure"]) if port.get("departure") else None
+
+        # Collect points BEFORE this port arrival (voyage TO this port)
+        voyage_points = []
+        while track_idx < num_points:
+            pt = track_points[track_idx]
+            pt_time = parse_ts(pt["timestamp"])
+            if pt_time >= port_arrival:
+                break
+            voyage_points.append(pt)
+            track_idx += 1
+
+        # Create voyage segment if we have points
+        if voyage_points:
+            from_port = port_stops[i - 1] if i > 0 else None
+            stats = compute_segment_stats(voyage_points, from_port, port)
+            if stats:
+                voyages.append(stats)
+
+        # Skip past points during port stop (until departure)
+        if port_departure:
+            while track_idx < num_points:
+                pt = track_points[track_idx]
+                pt_time = parse_ts(pt["timestamp"])
+                if pt_time > port_departure:
+                    break
+                track_idx += 1
+
+    # Handle remaining points after last port (voyage in progress)
+    if track_idx < num_points:
+        voyage_points = track_points[track_idx:]
+        if voyage_points:
+            from_port = port_stops[-1] if port_stops else None
+            stats = compute_segment_stats(voyage_points, from_port, None)
+            if stats:
+                voyages.append(stats)
+
+    return voyages
 
 
 async def match_stop_to_port(db: aiosqlite.Connection, lat: float, lon: float) -> dict | None:
@@ -795,7 +833,7 @@ async def get_vessel_track(
         # Include port stops and voyage segments if requested
         if include_analysis:
             port_stops = await detect_port_visits(db, mmsi)
-            voyage_segments = await detect_voyage_segments(db, mmsi)
+            voyage_segments = await detect_voyage_segments(db, mmsi, port_stops)
             result["port_stops"] = port_stops
             result["voyage_segments"] = voyage_segments
 

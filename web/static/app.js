@@ -783,41 +783,24 @@ function formatPortStopLabel(stop) {
 function formatVoyageSegmentLabel(segment) {
     const lines = [];
 
-    // Line 1: Destination
-    const port = segment.destination_port;
-    const destName = port ? port.name : segment.destination_code;
-    lines.push(`→ ${destName}`);
+    // Line 1: Route (from → to)
+    const fromName = segment.from_port?.name || 'Start';
+    const toName = segment.to_port?.name || (segment.in_progress ? 'In progress' : 'End');
+    lines.push(`${fromName} → ${toName}`);
 
-    // Line 2: Country if available
-    if (port && port.country) {
-        lines.push(port.country);
-    }
-
-    // Line 3: Duration
+    // Line 2: Duration and speed
     const hours = segment.duration_hours;
     const durationStr = hours >= 24
         ? `${Math.floor(hours / 24)}d ${Math.round(hours % 24)}h`
         : `${Math.round(hours)}h`;
-    lines.push(`Voyage: ${durationStr}`);
+    lines.push(`${durationStr} · ${segment.avg_speed} kts`);
 
-    // Line 4: Average speed
-    lines.push(`Avg: ${segment.avg_speed} kts`);
-
-    // Line 5: Start time
+    // Line 3: Time range (compact)
     const start = new Date(segment.start_time);
-    const startStr = start.toLocaleString([], {
-        month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit'
-    });
-    lines.push(`Start: ${startStr}`);
-
-    // Line 6: End time
     const end = new Date(segment.end_time);
-    const endStr = end.toLocaleString([], {
-        month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit'
-    });
-    lines.push(`End: ${endStr}`);
+    const startStr = start.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const endStr = end.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    lines.push(`${startStr} – ${endStr}`);
 
     return lines.join('\n');
 }
