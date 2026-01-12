@@ -510,55 +510,62 @@ function updateLayers() {
             }
 
             // Port stop markers (shown when names are enabled)
+            // iOS-style muted colors: amber for ports, slate for voyages
+            const portColor = [255, 183, 77];      // Muted amber
+            const portColorAlpha = [255, 183, 77, 220];
+
             if (s.showVesselNames && currentPortStops.length > 0) {
-                // Port stop icons (anchor markers)
+                // Port stop icons (small dots)
                 layers.push(new deck.ScatterplotLayer({
                     id: 'port-stops-marker-layer',
                     data: currentPortStops,
                     getPosition: d => [d.lon, d.lat],
-                    getRadius: 10,
-                    getFillColor: [76, 175, 80, 220],  // Green for port stops
-                    getLineColor: [255, 255, 255, 255],
-                    lineWidthMinPixels: 2,
+                    getRadius: 6,
+                    getFillColor: portColorAlpha,
+                    getLineColor: [40, 40, 40, 255],
+                    lineWidthMinPixels: 1,
                     stroked: true,
-                    radiusMinPixels: 8,
-                    radiusMaxPixels: 14,
+                    radiusMinPixels: 5,
+                    radiusMaxPixels: 10,
                     pickable: true,
                 }));
 
-                // Port stop labels
+                // Port stop labels - offset with callout
                 layers.push(new deck.TextLayer({
                     id: 'port-stops-label-layer',
                     data: currentPortStops,
                     getPosition: d => [d.lon, d.lat],
                     getText: d => formatPortStopLabel(d),
-                    getColor: [76, 175, 80, 255],
-                    getSize: 12,
+                    getColor: [240, 240, 240, 255],
+                    getSize: 11,
                     getTextAnchor: 'start',
                     getAlignmentBaseline: 'center',
-                    getPixelOffset: [14, 0],
-                    fontFamily: 'Arial, sans-serif',
-                    fontWeight: 'bold',
+                    getPixelOffset: [16, -30],  // Offset up and right
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif',
+                    fontWeight: '500',
                     background: true,
-                    getBackgroundColor: [0, 0, 0, 180],
-                    backgroundPadding: [4, 2],
+                    getBackgroundColor: [45, 45, 50, 230],
+                    backgroundPadding: [6, 4],
                 }));
             }
 
             // Voyage segment markers (shown when names are enabled)
+            const voyageColor = [158, 172, 186];   // Muted slate-blue
+            const voyageColorAlpha = [158, 172, 186, 200];
+
             if (s.showVesselNames && currentVoyageSegments.length > 0) {
-                // Voyage segment icons (navigation markers)
+                // Voyage segment icons (small dots at midpoint)
                 layers.push(new deck.ScatterplotLayer({
                     id: 'voyage-segments-marker-layer',
                     data: currentVoyageSegments,
                     getPosition: d => [d.midpoint_lon, d.midpoint_lat],
-                    getRadius: 8,
-                    getFillColor: [33, 150, 243, 200],  // Blue for voyage segments
-                    getLineColor: [255, 255, 255, 255],
+                    getRadius: 4,
+                    getFillColor: voyageColorAlpha,
+                    getLineColor: [40, 40, 40, 255],
                     lineWidthMinPixels: 1,
                     stroked: true,
-                    radiusMinPixels: 6,
-                    radiusMaxPixels: 12,
+                    radiusMinPixels: 4,
+                    radiusMaxPixels: 8,
                     pickable: true,
                 }));
 
@@ -568,16 +575,16 @@ function updateLayers() {
                     data: currentVoyageSegments,
                     getPosition: d => [d.midpoint_lon, d.midpoint_lat],
                     getText: d => formatVoyageSegmentLabel(d),
-                    getColor: [33, 150, 243, 255],
-                    getSize: 11,
+                    getColor: [200, 200, 200, 255],
+                    getSize: 10,
                     getTextAnchor: 'start',
                     getAlignmentBaseline: 'center',
-                    getPixelOffset: [12, 0],
-                    fontFamily: 'Arial, sans-serif',
-                    fontWeight: 'normal',
+                    getPixelOffset: [10, 0],
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif',
+                    fontWeight: '400',
                     background: true,
-                    getBackgroundColor: [0, 0, 0, 160],
-                    backgroundPadding: [3, 2],
+                    getBackgroundColor: [35, 38, 42, 210],
+                    backgroundPadding: [5, 3],
                 }));
             }
         }
@@ -739,68 +746,62 @@ function getTrackPointColor(msgType) {
     }
 }
 
-// Format port stop label for map display
+// Format port stop label for map display - compact iOS-style
 function formatPortStopLabel(stop) {
     const lines = [];
 
-    // Line 1: Port code and name
-    lines.push(`${stop.locode} - ${stop.name}`);
+    // Line 1: Port name with code
+    lines.push(`${stop.name}`);
 
-    // Line 2: Location (country or region)
-    if (stop.country) {
-        lines.push(stop.country);
-    }
-
-    // Line 3: Duration
+    // Line 2: Duration (no prefix - context is clear)
     const hours = stop.duration_hours;
+    const mins = Math.round((hours % 1) * 60);
     const durationStr = hours >= 24
         ? `${Math.floor(hours / 24)}d ${Math.round(hours % 24)}h`
-        : `${Math.round(hours)}h`;
-    lines.push(`Duration: ${durationStr}`);
+        : mins > 0
+            ? `${Math.floor(hours)}h ${mins}m`
+            : `${Math.round(hours)}h`;
+    lines.push(durationStr);
 
-    // Line 4: Arrival time
+    // Line 3: Time range with arrow (arrival → departure)
     const arrival = new Date(stop.arrival);
-    const arrivalStr = arrival.toLocaleString([], {
-        month: 'short', day: 'numeric',
-        hour: '2-digit', minute: '2-digit'
-    });
-    lines.push(`Arr: ${arrivalStr}`);
+    const timeOpts = { hour: 'numeric', minute: '2-digit' };
+    const arrivalStr = arrival.toLocaleString([], timeOpts);
 
-    // Line 5: Departure time (if available)
     if (stop.departure) {
         const departure = new Date(stop.departure);
-        const departureStr = departure.toLocaleString([], {
-            month: 'short', day: 'numeric',
-            hour: '2-digit', minute: '2-digit'
-        });
-        lines.push(`Dep: ${departureStr}`);
+        const departureStr = departure.toLocaleString([], timeOpts);
+        // Show date only if different day
+        const arrDate = arrival.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        const depDate = departure.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        if (arrDate === depDate) {
+            lines.push(`${arrDate} ${arrivalStr} → ${departureStr}`);
+        } else {
+            lines.push(`${arrDate} ${arrivalStr} → ${depDate} ${departureStr}`);
+        }
+    } else {
+        const arrDate = arrival.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        lines.push(`${arrDate} ${arrivalStr}`);
     }
 
     return lines.join('\n');
 }
 
-// Format voyage segment label for map display
+// Format voyage segment label for map display - compact iOS-style
 function formatVoyageSegmentLabel(segment) {
     const lines = [];
 
     // Line 1: Route (from → to)
     const fromName = segment.from_port?.name || 'Start';
-    const toName = segment.to_port?.name || (segment.in_progress ? 'In progress' : 'End');
+    const toName = segment.to_port?.name || (segment.in_progress ? '...' : 'End');
     lines.push(`${fromName} → ${toName}`);
 
-    // Line 2: Duration and speed
+    // Line 2: Duration and speed (compact)
     const hours = segment.duration_hours;
     const durationStr = hours >= 24
         ? `${Math.floor(hours / 24)}d ${Math.round(hours % 24)}h`
         : `${Math.round(hours)}h`;
-    lines.push(`${durationStr} · ${segment.avg_speed} kts`);
-
-    // Line 3: Time range (compact)
-    const start = new Date(segment.start_time);
-    const end = new Date(segment.end_time);
-    const startStr = start.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    const endStr = end.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    lines.push(`${startStr} – ${endStr}`);
+    lines.push(`${durationStr} · ${segment.avg_speed.toFixed(1)} kts`);
 
     return lines.join('\n');
 }

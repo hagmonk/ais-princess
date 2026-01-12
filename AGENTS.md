@@ -80,6 +80,7 @@ ais-princess/
 ## Must Not
 
 - **Do not commit as the user** - Always set agent git identity first (see above)
+- **Do not run servers in background** - The user manages services via `uv run ais-tmux`. Running servers (especially on port 8000) in background mode conflicts with `--restart-all` and causes port binding issues. If you need to test the web server, run it briefly in the foreground then stop it.
 - Do not use React, Vue, Svelte, or any frontend framework requiring a build step
 - Do not use npm, yarn, or any JavaScript package manager
 - Do not implement authentication or authorization
