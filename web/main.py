@@ -246,53 +246,108 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 async def detect_port_visits(db: aiosqlite.Connection, mmsi: int) -> list[dict]:
-    """Detect port visits from track data by analyzing stationary periods."""
+    """Detect port visits from track data by finding stationary→moving transitions.
 
-    gap_days = GAP_HOURS / 24.0
+    A stop is defined as:
+    - Arrival: when speed drops below threshold (transition from moving to stationary)
+    - Departure: when speed rises above threshold (transition from stationary to moving)
 
-    # Query to find stops using window functions
+    This handles data gaps correctly - gaps don't break up a stop as long as the
+    vessel is still stationary when data resumes.
+    """
+    # Get all positions with speed transition info
     query = """
-    WITH stationary_points AS (
+    WITH position_data AS (
         SELECT
-            timestamp,
-            lat, lon, speed,
-            julianday(timestamp) - lag(julianday(timestamp)) OVER (ORDER BY timestamp) as gap_days
+            timestamp, lat, lon, speed,
+            CASE WHEN speed < ? THEN 1 ELSE 0 END as is_stationary,
+            LAG(CASE WHEN speed < ? THEN 1 ELSE 0 END) OVER (ORDER BY timestamp) as prev_stationary
         FROM positions
-        WHERE mmsi = ? AND speed < ?
+        WHERE mmsi = ?
     ),
-    stop_starts AS (
+    transitions AS (
         SELECT
-            timestamp, lat, lon,
-            CASE WHEN gap_days > ? OR gap_days IS NULL THEN 1 ELSE 0 END as new_stop
-        FROM stationary_points
-    ),
-    stop_groups AS (
-        SELECT
-            timestamp, lat, lon,
-            SUM(new_stop) OVER (ORDER BY timestamp) as stop_id
-        FROM stop_starts
+            timestamp, lat, lon, speed, is_stationary, prev_stationary,
+            CASE
+                -- Arrival: transition from moving to stationary
+                WHEN is_stationary = 1 AND (prev_stationary = 0 OR prev_stationary IS NULL) THEN 'arrival'
+                -- Departure: transition from stationary to moving
+                WHEN is_stationary = 0 AND prev_stationary = 1 THEN 'departure'
+                ELSE NULL
+            END as transition_type
+        FROM position_data
     )
-    SELECT
-        stop_id,
-        COUNT(*) as points,
-        AVG(lat) as lat,
-        AVG(lon) as lon,
-        MIN(timestamp) as arrival,
-        MAX(timestamp) as departure,
-        (julianday(MAX(timestamp)) - julianday(MIN(timestamp))) * 24 as hours
-    FROM stop_groups
-    GROUP BY stop_id
-    HAVING hours >= ?
-    ORDER BY arrival DESC
-    LIMIT 10
+    SELECT timestamp, lat, lon, speed, transition_type
+    FROM transitions
+    WHERE transition_type IS NOT NULL
+    ORDER BY timestamp
     """
 
-    async with db.execute(query, (mmsi, MAX_SPEED_KNOTS, gap_days, MIN_STOP_HOURS)) as cursor:
-        stops = await cursor.fetchall()
+    async with db.execute(query, (MAX_SPEED_KNOTS, MAX_SPEED_KNOTS, mmsi)) as cursor:
+        transitions = await cursor.fetchall()
+
+    # Pair arrivals with departures to form stops
+    stops = []
+    current_arrival = None
+
+    for row in transitions:
+        timestamp, lat, lon, speed, transition_type = row
+        if transition_type == 'arrival':
+            current_arrival = {'timestamp': timestamp, 'lat': lat, 'lon': lon}
+        elif transition_type == 'departure' and current_arrival:
+            # Calculate duration
+            from datetime import datetime
+            try:
+                arr_dt = datetime.fromisoformat(current_arrival['timestamp'].replace('+00:00', ''))
+                dep_dt = datetime.fromisoformat(timestamp.replace('+00:00', ''))
+                hours = (dep_dt - arr_dt).total_seconds() / 3600
+            except:
+                hours = 0
+
+            if hours >= MIN_STOP_HOURS:
+                stops.append({
+                    'arrival': current_arrival['timestamp'],
+                    'departure': timestamp,
+                    'lat': current_arrival['lat'],
+                    'lon': current_arrival['lon'],
+                    'hours': hours
+                })
+            current_arrival = None
+
+    # Handle case where vessel is still stopped (no departure yet)
+    if current_arrival:
+        # Get the last stationary timestamp
+        last_query = """
+        SELECT timestamp FROM positions
+        WHERE mmsi = ? AND speed < ?
+        ORDER BY timestamp DESC LIMIT 1
+        """
+        async with db.execute(last_query, (mmsi, MAX_SPEED_KNOTS)) as cursor:
+            last_row = await cursor.fetchone()
+            if last_row:
+                from datetime import datetime
+                try:
+                    arr_dt = datetime.fromisoformat(current_arrival['timestamp'].replace('+00:00', ''))
+                    dep_dt = datetime.fromisoformat(last_row[0].replace('+00:00', ''))
+                    hours = (dep_dt - arr_dt).total_seconds() / 3600
+                except:
+                    hours = 0
+
+                if hours >= MIN_STOP_HOURS:
+                    stops.append({
+                        'arrival': current_arrival['timestamp'],
+                        'departure': last_row[0],
+                        'lat': current_arrival['lat'],
+                        'lon': current_arrival['lon'],
+                        'hours': hours
+                    })
+
+    # Sort by arrival descending, limit to 10
+    stops = sorted(stops, key=lambda s: s['arrival'], reverse=True)[:10]
 
     visits = []
     for stop in stops:
-        stop_lat, stop_lon = stop[2], stop[3]
+        stop_lat, stop_lon = stop['lat'], stop['lon']
 
         # Find nearest port
         port = await match_stop_to_port(db, stop_lat, stop_lon)
@@ -305,9 +360,9 @@ async def detect_port_visits(db: aiosqlite.Connection, mmsi: int) -> list[dict]:
                 "region": port.get("region"),
                 "lat": port["lat"],
                 "lon": port["lon"],
-                "arrival": stop[4],
-                "departure": stop[5],
-                "duration_hours": round(stop[6], 1),
+                "arrival": stop['arrival'],
+                "departure": stop['departure'],
+                "duration_hours": round(stop['hours'], 1),
                 "distance_km": port["distance_km"]
             })
 
