@@ -519,6 +519,38 @@ function updateLayers() {
     // Use computed filteredVessels signal - already filtered by timeline, type, and search
     const vesselData = filteredVessels.value;
 
+    // Moving vessel indicator - pulsing ring around vessels with speed > 0.5 knots
+    const movingVessels = vesselData.filter(v => !v.isAtoN && v.speed > 0.5);
+    if (movingVessels.length > 0) {
+        // Calculate pulse value once for all vessels (consistent animation)
+        const pulse = Math.sin(Date.now() / 400) * 0.3 + 0.7;
+        const pulseAlpha = Math.floor(pulse * 180);
+
+        layers.push(new deck.ScatterplotLayer({
+            id: 'moving-vessel-indicator',
+            data: movingVessels,
+            getPosition: d => [d.lon, d.lat],
+            getRadius: d => d.mmsi === mmsi ? 24 : 16,
+            getFillColor: [0, 217, 255, 0],  // Transparent fill
+            getLineColor: d => d.mmsi === mmsi
+                ? [255, 200, 0, pulseAlpha]
+                : [0, 217, 255, pulseAlpha],
+            lineWidthMinPixels: 2,
+            stroked: true,
+            filled: false,
+            radiusMinPixels: 12,
+            radiusMaxPixels: 32,
+            pickable: false,
+            // Smooth position transitions to match vessel icons
+            transitions: {
+                getPosition: 1000,
+            },
+            updateTriggers: {
+                getLineColor: [pulseAlpha],  // Force update for animation
+            },
+        }));
+    }
+
     layers.push(new deck.IconLayer({
         id: 'vessel-icons-layer',
         data: vesselData,
@@ -531,6 +563,11 @@ function updateLayers() {
         pickable: true,
         onClick: ({ object }) => {
             if (object) selectVessel(object.mmsi);
+        },
+        // Smooth animation when vessel positions update
+        transitions: {
+            getPosition: 1000,  // 1 second interpolation
+            getAngle: 500,      // 0.5 second rotation
         },
     }));
 
@@ -1113,7 +1150,7 @@ function updateVoyageMarkers() {
         const marker = new maplibregl.Marker({
             element: el,
             anchor: 'bottom',
-            offset: [0, -10]
+            offset: [0, -18]  // Account for leader line (10px) + anchor dot (8px)
         })
             .setLngLat([stop.lon, stop.lat])
             .addTo(map);
@@ -1130,7 +1167,7 @@ function updateVoyageMarkers() {
         const marker = new maplibregl.Marker({
             element: el,
             anchor: 'bottom',
-            offset: [0, -10]
+            offset: [0, -18]  // Account for leader line (10px) + anchor dot (8px)
         })
             .setLngLat([segment.midpoint_lon, segment.midpoint_lat])
             .addTo(map);
@@ -3300,6 +3337,44 @@ function zoomToVesselTrack(mmsi) {
 }
 
 // ============================================================================
+// Animation Loop for Moving Vessel Indicators
+// ============================================================================
+
+let animationFrameId = null;
+let lastAnimationTime = 0;
+const ANIMATION_INTERVAL = 33;  // ~30fps for smooth pulsing
+
+function animateMovingVessels(timestamp) {
+    // Throttle to ~30fps
+    if (timestamp - lastAnimationTime >= ANIMATION_INTERVAL) {
+        lastAnimationTime = timestamp;
+
+        // Only update if there are moving vessels and deck overlay is ready
+        const vesselData = filteredVessels.value;
+        const hasMovingVessels = vesselData.some(v => !v.isAtoN && v.speed > 0.5);
+
+        if (hasMovingVessels && deckOverlay) {
+            updateLayers();
+        }
+    }
+
+    animationFrameId = requestAnimationFrame(animateMovingVessels);
+}
+
+function startVesselAnimation() {
+    if (!animationFrameId) {
+        animationFrameId = requestAnimationFrame(animateMovingVessels);
+    }
+}
+
+function stopVesselAnimation() {
+    if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+    }
+}
+
+// ============================================================================
 // Initialize
 // ============================================================================
 
@@ -3331,6 +3406,9 @@ document.addEventListener('DOMContentLoaded', () => {
         initEffects();
         console.log('All UI initialized, connecting WebSocket...');
         connectWebSocket();
+
+        // Start animation loop for moving vessel indicators
+        startVesselAnimation();
 
         // Check for vessel selection in URL hash after a delay
         setTimeout(selectVesselFromHash, 500);

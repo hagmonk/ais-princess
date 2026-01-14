@@ -253,75 +253,143 @@ html, body {
     margin: 0 4px;
 }
 
-/* Callout pointer - base styles */
+/* Callout pointer and leader line - base styles */
 .voyage-pill {
     position: relative;
 }
 
-.voyage-pill::after {
+/* Leader line (::before) - extends from pill to anchor point */
+.voyage-pill::before {
     content: '';
     position: absolute;
-    width: 10px;
-    height: 10px;
-    transform: rotate(45deg);
     pointer-events: none;
 }
 
-/* Port pill pointer (white) */
+/* Anchor dot (::after) - small circle at the geographic anchor point */
+.voyage-pill::after {
+    content: '';
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+/* Port pill leader line and dot (white/gray) */
+.voyage-pill.port::before {
+    background: rgba(255, 255, 255, 0.6);
+}
 .voyage-pill.port::after {
-    background: rgba(255, 255, 255, 0.9);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+    background: rgba(255, 255, 255, 0.95);
+    border: 2px solid rgba(0, 0, 0, 0.3);
 }
 
-/* Transit pill pointer (cyan) */
+/* Transit pill leader line and dot (cyan) */
+.voyage-pill.transit::before {
+    background: rgba(0, 190, 255, 0.6);
+}
 .voyage-pill.transit::after {
-    background: rgba(0, 190, 255, 0.85);
-    box-shadow: 0 1px 4px rgba(0, 190, 255, 0.3);
+    background: rgba(0, 190, 255, 0.95);
+    border: 2px solid rgba(255, 255, 255, 0.5);
 }
 
-/* Pointer positions - determined by JS based on offset direction */
+/* Pointer positions - vertical callouts (bottom) */
+.voyage-pill.pointer-bottom::before {
+    bottom: -10px;
+    left: 50%;
+    width: 2px;
+    height: 10px;
+    margin-left: -1px;
+}
 .voyage-pill.pointer-bottom::after {
-    bottom: -5px;
+    bottom: -14px;
     left: 50%;
-    margin-left: -5px;
+    margin-left: -4px;
 }
 
+.voyage-pill.pointer-bottom-left::before {
+    bottom: -10px;
+    left: 16px;
+    width: 2px;
+    height: 10px;
+}
 .voyage-pill.pointer-bottom-left::after {
-    bottom: -5px;
-    left: 16px;
+    bottom: -14px;
+    left: 12px;
 }
 
+.voyage-pill.pointer-bottom-right::before {
+    bottom: -10px;
+    right: 16px;
+    width: 2px;
+    height: 10px;
+}
 .voyage-pill.pointer-bottom-right::after {
-    bottom: -5px;
-    right: 16px;
+    bottom: -14px;
+    right: 12px;
 }
 
-.voyage-pill.pointer-top::after {
-    top: -5px;
+/* Pointer positions - vertical callouts (top) */
+.voyage-pill.pointer-top::before {
+    top: -10px;
     left: 50%;
-    margin-left: -5px;
+    width: 2px;
+    height: 10px;
+    margin-left: -1px;
+}
+.voyage-pill.pointer-top::after {
+    top: -14px;
+    left: 50%;
+    margin-left: -4px;
 }
 
-.voyage-pill.pointer-top-left::after {
-    top: -5px;
+.voyage-pill.pointer-top-left::before {
+    top: -10px;
     left: 16px;
+    width: 2px;
+    height: 10px;
+}
+.voyage-pill.pointer-top-left::after {
+    top: -14px;
+    left: 12px;
 }
 
-.voyage-pill.pointer-top-right::after {
-    top: -5px;
+.voyage-pill.pointer-top-right::before {
+    top: -10px;
     right: 16px;
+    width: 2px;
+    height: 10px;
+}
+.voyage-pill.pointer-top-right::after {
+    top: -14px;
+    right: 12px;
 }
 
+/* Pointer positions - horizontal callouts */
+.voyage-pill.pointer-left::before {
+    left: -10px;
+    top: 50%;
+    width: 10px;
+    height: 2px;
+    margin-top: -1px;
+}
 .voyage-pill.pointer-left::after {
-    left: -5px;
+    left: -14px;
     top: 50%;
-    margin-top: -5px;
+    margin-top: -4px;
 }
 
-.voyage-pill.pointer-right::after {
-    right: -5px;
+.voyage-pill.pointer-right::before {
+    right: -10px;
     top: 50%;
-    margin-top: -5px;
+    width: 10px;
+    height: 2px;
+    margin-top: -1px;
+}
+.voyage-pill.pointer-right::after {
+    right: -14px;
+    top: 50%;
+    margin-top: -4px;
 }
 
 /* Override MapLibre marker defaults to prevent truncation */
