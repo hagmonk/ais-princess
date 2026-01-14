@@ -119,6 +119,7 @@ function saveSettingsFromModal() {
     closeSettingsModal();
     updateVesselTable();  // Refresh table for age cutoff changes
     updateLayers();       // Refresh map for all settings changes
+    updateVoyageMarkers();  // Refresh HTML voyage markers
 }
 
 function initSettings() {
@@ -140,6 +141,7 @@ function initSettings() {
     document.getElementById('names-btn').addEventListener('click', () => {
         updateSettings({ showVesselNames: !settings.value.showVesselNames });
         updateLayers();  // Refresh map to show/hide names
+        updateVoyageMarkers();  // Refresh HTML voyage markers
     });
 
     // Apply initial settings
@@ -509,84 +511,8 @@ function updateLayers() {
                 }));
             }
 
-            // Port stop markers (shown when names are enabled)
-            // iOS-style muted colors: amber for ports, slate for voyages
-            const portColor = [255, 183, 77];      // Muted amber
-            const portColorAlpha = [255, 183, 77, 220];
-
-            if (s.showVesselNames && currentPortStops.length > 0) {
-                // Port stop icons (small dots)
-                layers.push(new deck.ScatterplotLayer({
-                    id: 'port-stops-marker-layer',
-                    data: currentPortStops,
-                    getPosition: d => [d.lon, d.lat],
-                    getRadius: 6,
-                    getFillColor: portColorAlpha,
-                    getLineColor: [40, 40, 40, 255],
-                    lineWidthMinPixels: 1,
-                    stroked: true,
-                    radiusMinPixels: 5,
-                    radiusMaxPixels: 10,
-                    pickable: true,
-                }));
-
-                // Port stop labels - offset with callout
-                layers.push(new deck.TextLayer({
-                    id: 'port-stops-label-layer',
-                    data: currentPortStops,
-                    getPosition: d => [d.lon, d.lat],
-                    getText: d => formatPortStopLabel(d),
-                    getColor: [240, 240, 240, 255],
-                    getSize: 11,
-                    getTextAnchor: 'start',
-                    getAlignmentBaseline: 'center',
-                    getPixelOffset: [16, -30],  // Offset up and right
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif',
-                    fontWeight: '500',
-                    background: true,
-                    getBackgroundColor: [45, 45, 50, 230],
-                    backgroundPadding: [6, 4],
-                }));
-            }
-
-            // Voyage segment markers (shown when names are enabled)
-            const voyageColor = [158, 172, 186];   // Muted slate-blue
-            const voyageColorAlpha = [158, 172, 186, 200];
-
-            if (s.showVesselNames && currentVoyageSegments.length > 0) {
-                // Voyage segment icons (small dots at midpoint)
-                layers.push(new deck.ScatterplotLayer({
-                    id: 'voyage-segments-marker-layer',
-                    data: currentVoyageSegments,
-                    getPosition: d => [d.midpoint_lon, d.midpoint_lat],
-                    getRadius: 4,
-                    getFillColor: voyageColorAlpha,
-                    getLineColor: [40, 40, 40, 255],
-                    lineWidthMinPixels: 1,
-                    stroked: true,
-                    radiusMinPixels: 4,
-                    radiusMaxPixels: 8,
-                    pickable: true,
-                }));
-
-                // Voyage segment labels
-                layers.push(new deck.TextLayer({
-                    id: 'voyage-segments-label-layer',
-                    data: currentVoyageSegments,
-                    getPosition: d => [d.midpoint_lon, d.midpoint_lat],
-                    getText: d => formatVoyageSegmentLabel(d),
-                    getColor: [200, 200, 200, 255],
-                    getSize: 10,
-                    getTextAnchor: 'start',
-                    getAlignmentBaseline: 'center',
-                    getPixelOffset: [10, 0],
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif',
-                    fontWeight: '400',
-                    background: true,
-                    getBackgroundColor: [35, 38, 42, 210],
-                    backgroundPadding: [5, 3],
-                }));
-            }
+            // Port stop and voyage markers are now rendered as HTML markers
+            // via updateVoyageMarkers() for full CSS styling control
         }
     }
 
@@ -746,14 +672,15 @@ function getTrackPointColor(msgType) {
     }
 }
 
-// Format port stop label for map display - compact iOS-style
+// Format port stop label for map display (combined for single TextLayer)
 function formatPortStopLabel(stop) {
-    const lines = [];
+    const primary = formatPortStopPrimary(stop);
+    const secondary = formatPortStopSecondary(stop);
+    return `${primary}\n${secondary}`;
+}
 
-    // Line 1: Port name with code
-    lines.push(`${stop.name}`);
-
-    // Line 2: Duration (no prefix - context is clear)
+// Primary: Port name with duration - "Kahului (11h)"
+function formatPortStopPrimary(stop) {
     const hours = stop.duration_hours;
     const mins = Math.round((hours % 1) * 60);
     const durationStr = hours >= 24
@@ -761,49 +688,55 @@ function formatPortStopLabel(stop) {
         : mins > 0
             ? `${Math.floor(hours)}h ${mins}m`
             : `${Math.round(hours)}h`;
-    lines.push(durationStr);
+    return `${stop.name} (${durationStr})`;
+}
 
-    // Line 3: Time range with arrow (arrival → departure)
+// Secondary: Date with time range - "Jan 9: 7:40 AM → 6:38 PM"
+function formatPortStopSecondary(stop) {
     const arrival = new Date(stop.arrival);
     const timeOpts = { hour: 'numeric', minute: '2-digit' };
-    const arrivalStr = arrival.toLocaleString([], timeOpts);
+    const arrDate = arrival.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    const arrTime = arrival.toLocaleTimeString([], timeOpts);
 
     if (stop.departure) {
         const departure = new Date(stop.departure);
-        const departureStr = departure.toLocaleString([], timeOpts);
-        // Show date only if different day
-        const arrDate = arrival.toLocaleDateString([], { month: 'short', day: 'numeric' });
         const depDate = departure.toLocaleDateString([], { month: 'short', day: 'numeric' });
-        if (arrDate === depDate) {
-            lines.push(`${arrDate} ${arrivalStr} → ${departureStr}`);
-        } else {
-            lines.push(`${arrDate} ${arrivalStr} → ${depDate} ${departureStr}`);
-        }
-    } else {
-        const arrDate = arrival.toLocaleDateString([], { month: 'short', day: 'numeric' });
-        lines.push(`${arrDate} ${arrivalStr}`);
-    }
+        const depTime = departure.toLocaleTimeString([], timeOpts);
 
-    return lines.join('\n');
+        if (arrDate === depDate) {
+            return `${arrDate}: ${arrTime} → ${depTime}`;
+        } else {
+            return `${arrDate}: ${arrTime} → ${depDate}: ${depTime}`;
+        }
+    }
+    return `${arrDate}: ${arrTime}`;
 }
 
-// Format voyage segment label for map display - compact iOS-style
+// Format voyage segment label for map display (combined for single TextLayer)
 function formatVoyageSegmentLabel(segment) {
-    const lines = [];
+    const primary = formatVoyageSegmentPrimary(segment);
+    const secondary = formatVoyageSegmentSecondary(segment);
+    return `${primary}\n${secondary}`;
+}
 
-    // Line 1: Route (from → to)
-    const fromName = segment.from_port?.name || 'Start';
-    const toName = segment.to_port?.name || (segment.in_progress ? '...' : 'End');
-    lines.push(`${fromName} → ${toName}`);
+// Primary: Route - "Honolulu → Kahului"
+function formatVoyageSegmentPrimary(segment) {
+    const fromName = segment.from_port?.name || 'Departure';
+    const toName = segment.to_port?.name || (segment.in_progress ? 'En route' : 'Arrival');
+    return `${fromName} → ${toName}`;
+}
 
-    // Line 2: Duration and speed (compact)
+// Secondary: Duration @ speed - "12h 54m @ 15 kts" (no dates - ports have them)
+function formatVoyageSegmentSecondary(segment) {
     const hours = segment.duration_hours;
+    const mins = Math.round((hours % 1) * 60);
     const durationStr = hours >= 24
         ? `${Math.floor(hours / 24)}d ${Math.round(hours % 24)}h`
-        : `${Math.round(hours)}h`;
-    lines.push(`${durationStr} · ${segment.avg_speed.toFixed(1)} kts`);
+        : mins > 0
+            ? `${Math.floor(hours)}h ${mins}m`
+            : `${Math.round(hours)}h`;
 
-    return lines.join('\n');
+    return `${durationStr} @ ${segment.avg_speed.toFixed(0)} kts`;
 }
 
 function getVesselColor(vessel) {
@@ -1111,6 +1044,108 @@ async function fetchVesselDetails(mmsi) {
 let currentPortStops = [];
 let currentVoyageSegments = [];
 
+// HTML markers for voyage pills (MapLibre markers)
+let voyageMarkers = [];
+
+// Create HTML for a port stop pill
+function createPortStopHTML(stop, pointerClass = 'pointer-bottom-left') {
+    const primary = formatPortStopPrimary(stop);
+    const secondary = formatPortStopSecondary(stop);
+    // Style arrow in secondary text
+    const styledSecondary = escapeHtml(secondary).replace('→', '<span class="arrow">→</span>');
+    return `<div class="voyage-pill port ${pointerClass}">
+        <div class="voyage-pill-primary">${escapeHtml(primary)}</div>
+        <div class="voyage-pill-secondary">${styledSecondary}</div>
+    </div>`;
+}
+
+// Create HTML for a transit segment pill
+function createTransitHTML(segment, pointerClass = 'pointer-bottom') {
+    const primary = formatVoyageSegmentPrimary(segment);
+    const secondary = formatVoyageSegmentSecondary(segment);
+    // Replace arrow with styled span
+    const styledPrimary = primary.replace('→', '<span class="arrow">→</span>');
+    return `<div class="voyage-pill transit ${pointerClass}">
+        <div class="voyage-pill-primary">${styledPrimary}</div>
+        <div class="voyage-pill-secondary">${escapeHtml(secondary)}</div>
+    </div>`;
+}
+
+// Escape HTML to prevent XSS
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Get pointer class from angle (angle from pill center to anchor point)
+function getPointerClassFromAngle(angle) {
+    // Normalize angle to 0-360
+    const deg = ((angle * 180 / Math.PI) + 360) % 360;
+
+    // 8 directions: pointer points TOWARDS anchor
+    if (deg >= 337.5 || deg < 22.5) return 'pointer-right';      // Anchor is to the right
+    if (deg >= 22.5 && deg < 67.5) return 'pointer-bottom-right'; // Anchor is bottom-right
+    if (deg >= 67.5 && deg < 112.5) return 'pointer-bottom';      // Anchor is below
+    if (deg >= 112.5 && deg < 157.5) return 'pointer-bottom-left';// Anchor is bottom-left
+    if (deg >= 157.5 && deg < 202.5) return 'pointer-left';       // Anchor is to the left
+    if (deg >= 202.5 && deg < 247.5) return 'pointer-top-left';   // Anchor is top-left
+    if (deg >= 247.5 && deg < 292.5) return 'pointer-top';        // Anchor is above
+    return 'pointer-top-right';                                    // Anchor is top-right
+}
+
+// Update voyage markers on map (simple version without collision detection)
+function updateVoyageMarkers() {
+    // Remove existing markers
+    voyageMarkers.forEach(m => m.remove());
+    voyageMarkers = [];
+
+    // Only show if vessel names are enabled
+    if (!settings.value.showVesselNames || !map) return;
+
+    // Create port stop markers
+    currentPortStops.forEach((stop, index) => {
+        const el = document.createElement('div');
+        el.innerHTML = createPortStopHTML(stop, 'pointer-bottom');
+        el.style.pointerEvents = 'none';
+        el.style.zIndex = String(100 + index);
+
+        const marker = new maplibregl.Marker({
+            element: el,
+            anchor: 'bottom',
+            offset: [0, -10]
+        })
+            .setLngLat([stop.lon, stop.lat])
+            .addTo(map);
+        voyageMarkers.push(marker);
+    });
+
+    // Create transit segment markers
+    currentVoyageSegments.forEach((segment, index) => {
+        const el = document.createElement('div');
+        el.innerHTML = createTransitHTML(segment, 'pointer-bottom');
+        el.style.pointerEvents = 'none';
+        el.style.zIndex = String(index);
+
+        const marker = new maplibregl.Marker({
+            element: el,
+            anchor: 'bottom',
+            offset: [0, -10]
+        })
+            .setLngLat([segment.midpoint_lon, segment.midpoint_lat])
+            .addTo(map);
+        voyageMarkers.push(marker);
+    });
+}
+
+// Clear voyage markers (called when vessel deselected)
+function clearVoyageMarkers() {
+    voyageMarkers.forEach(m => m.remove());
+    voyageMarkers = [];
+    currentPortStops = [];
+    currentVoyageSegments = [];
+}
+
 // Fetch historical track from backend API
 async function fetchTrack(mmsi) {
     try {
@@ -1130,6 +1165,9 @@ async function fetchTrack(mmsi) {
         currentPortStops = data.port_stops || [];
         currentVoyageSegments = data.voyage_segments || [];
         console.log(`Track analysis: ${currentPortStops.length} port stops, ${currentVoyageSegments.length} voyage segments`);
+
+        // Update HTML voyage markers
+        updateVoyageMarkers();
 
         console.log(`Fetched ${data.positions.length} track points for vessel ${mmsi}`);
 
@@ -2879,6 +2917,7 @@ function navigateBack() {
     // Handle deselection when going back to vessels list
     if (prev.view === 'vessels') {
         deselectVessel();
+        clearVoyageMarkers();
         updateUrlHash(null);
         document.getElementById('charts-panel').classList.add('hidden');
         updateMobileTimelineVisibility();
@@ -2911,6 +2950,7 @@ function navigateToRoot(viewId) {
     // Deselect vessel when going to root
     if (selectedMmsi.value) {
         deselectVessel();
+        clearVoyageMarkers();
         updateUrlHash(null);
         document.getElementById('charts-panel').classList.add('hidden');
         updateMobileTimelineVisibility();

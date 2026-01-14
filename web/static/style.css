@@ -190,6 +190,146 @@ html, body {
     height: 100%;
 }
 
+/* ============================================================================
+   Voyage Pills - Port Stops and Transit Segments
+   ============================================================================ */
+
+.voyage-pill {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    border-radius: 14px;
+    padding: 8px 14px;
+    pointer-events: auto;
+    cursor: default;
+    white-space: nowrap;
+    width: max-content;
+    max-width: none;
+    overflow: visible;
+}
+
+.voyage-pill-primary {
+    font-weight: 600;
+    font-size: 14px;
+    line-height: 1.3;
+}
+
+.voyage-pill-secondary {
+    font-weight: 400;
+    font-size: 12px;
+    line-height: 1.3;
+    margin-top: 2px;
+}
+
+/* Transit pills - cyan/blue to match track line */
+.voyage-pill.transit {
+    background: rgba(0, 190, 255, 0.85);
+    box-shadow: 0 2px 12px rgba(0, 190, 255, 0.4);
+}
+
+.voyage-pill.transit .voyage-pill-primary {
+    color: #fff;
+}
+
+.voyage-pill.transit .voyage-pill-secondary {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+/* Port pills - white/light for contrast */
+.voyage-pill.port {
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+}
+
+.voyage-pill.port .voyage-pill-primary {
+    color: #1a1a1a;
+}
+
+.voyage-pill.port .voyage-pill-secondary {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+/* Arrow styling */
+.voyage-pill .arrow {
+    margin: 0 4px;
+}
+
+/* Callout pointer - base styles */
+.voyage-pill {
+    position: relative;
+}
+
+.voyage-pill::after {
+    content: '';
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    transform: rotate(45deg);
+    pointer-events: none;
+}
+
+/* Port pill pointer (white) */
+.voyage-pill.port::after {
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+/* Transit pill pointer (cyan) */
+.voyage-pill.transit::after {
+    background: rgba(0, 190, 255, 0.85);
+    box-shadow: 0 1px 4px rgba(0, 190, 255, 0.3);
+}
+
+/* Pointer positions - determined by JS based on offset direction */
+.voyage-pill.pointer-bottom::after {
+    bottom: -5px;
+    left: 50%;
+    margin-left: -5px;
+}
+
+.voyage-pill.pointer-bottom-left::after {
+    bottom: -5px;
+    left: 16px;
+}
+
+.voyage-pill.pointer-bottom-right::after {
+    bottom: -5px;
+    right: 16px;
+}
+
+.voyage-pill.pointer-top::after {
+    top: -5px;
+    left: 50%;
+    margin-left: -5px;
+}
+
+.voyage-pill.pointer-top-left::after {
+    top: -5px;
+    left: 16px;
+}
+
+.voyage-pill.pointer-top-right::after {
+    top: -5px;
+    right: 16px;
+}
+
+.voyage-pill.pointer-left::after {
+    left: -5px;
+    top: 50%;
+    margin-top: -5px;
+}
+
+.voyage-pill.pointer-right::after {
+    right: -5px;
+    top: 50%;
+    margin-top: -5px;
+}
+
+/* Override MapLibre marker defaults to prevent truncation */
+.maplibregl-marker {
+    overflow: visible !important;
+    max-width: none !important;
+}
+
 /* Sidebar resize handle */
 #sidebar-resize {
     width: 5px;

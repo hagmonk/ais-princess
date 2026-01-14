@@ -31,16 +31,14 @@ bd sync               # Sync with git
 6. **Hand off** - Provide context for next session
 
 **GIT COMMIT IDENTITY:**
-Agents MUST configure git before committing to avoid GPG signing issues:
+Agents MUST use `-c` flags when committing to avoid GPG signing issues:
 ```bash
-git config user.name "Claude Agent"
-git config user.email "claude-agent@anthropic.com"
-git config commit.gpgsign false
+git -c user.name="Claude Code" -c user.email="noreply@anthropic.com" -c commit.gpgsign=false commit -m "..."
 ```
 
 **CRITICAL RULES:**
-- **ALWAYS set agent identity before committing** - User's default git uses GPG signing which fails
-- The `commit.gpgsign false` config is required for `bd sync` to work
+- **ALWAYS use `-c` flags** - User's default git uses GPG signing which fails
+- The `commit.gpgsign=false` flag is required for commits to work
 - You may push to remote after committing
 - You may run `bd sync` to sync issue tracking
 
@@ -55,16 +53,26 @@ git config commit.gpgsign false
 ```
 ais-princess/
 ├── capture/              # AIS data capture from RTL-SDR
-│   └── ais-catcher.py    # Main capture script (runs AIS-catcher, stores NMEA to SQLite)
-├── db/                   # Database files
-│   └── ais-data.db       # SQLite database with raw NMEA messages
+│   ├── ais-catcher.py    # Main capture (runs AIS-catcher, UDP → SQLite)
+│   └── rtl-ais.py        # Alternative capture (runs rtl_ais)
+├── db/                   # Database and processing
+│   ├── ais-data.db       # SQLite database (raw + decoded data)
+│   ├── migrate.py        # Schema migration (tables, triggers, indexes)
+│   ├── decoder.py        # Decoder service (raw NMEA → decoded tables)
+│   └── sync_ports.py     # Port database sync (NGA WPI, UN/LOCODE, IATA)
 ├── dac-fid-decoder/      # Library for decoding binary AIS payloads
 │   ├── src/ais_binary/   # Decoder modules (DAC 001, 200, 367)
 │   ├── tests/            # Unit tests
 │   └── examples/         # Usage examples
+├── tools/                # Development utilities
+│   └── tmux_runner.py    # ais-tmux service manager
 └── web/                  # Web UI for real-time vessel display
-    ├── main.py           # FastAPI backend (polls SQLite, broadcasts via WebSocket)
-    └── static/           # Frontend (index.html, app.js, style.css)
+    ├── main.py           # FastAPI backend (WebSocket, REST API)
+    └── static/
+        ├── index.html    # Main page with CDN dependencies
+        ├── app.js        # Application logic
+        ├── state.js      # Reactive state (@preact/signals-core)
+        └── style.css     # Dark theme styling
 ```
 
 ---
@@ -100,6 +108,7 @@ ais-princess/
   - deck.gl (WebGL layers)
   - Tabulator (data tables)
   - uPlot (time series charts)
+  - @preact/signals-core (reactive state management)
 - All dependencies loaded via unpkg CDN
 
 ## AIS Data Requirements
@@ -121,21 +130,26 @@ ais-princess/
 ```
 capture/
   ais-catcher.py     - Raw NMEA collector (runs AIS-catcher, UDP → SQLite)
+  rtl-ais.py         - Alternative collector (runs rtl_ais, UDP → SQLite)
 db/
   ais-data.db        - SQLite database (raw NMEA + decoded data)
   migrate.py         - Schema migration (tables, triggers, indexes)
   decoder.py         - Decoder service (raw → positions/vessels)
+  sync_ports.py      - Port database sync (WPI, UN/LOCODE, IATA airports)
 dac-fid-decoder/
   src/ais_binary/    - DAC/FID binary payload decoders
     dac001.py        - IMO international messages
     dac200.py        - Inland waterway messages
     dac367.py        - US/NOAA messages
     bitreader.py     - Bit-level parsing utilities
+tools/
+  tmux_runner.py     - ais-tmux service manager (entry point)
 web/
-  main.py            - FastAPI backend (reads decoded tables → WebSocket)
+  main.py            - FastAPI backend (WebSocket, REST API, port resolution)
   static/
     index.html       - Main page with CDN dependencies
     app.js           - Application logic
+    state.js         - Reactive state management (@preact/signals-core)
     style.css        - Dark theme styling
 ```
 
@@ -224,6 +238,9 @@ uv run web/main.py --port 8000
 # Run database migration (creates tables, triggers, indexes)
 uv run db/migrate.py
 
+# Sync port database (downloads NGA WPI, UN/LOCODE, IATA airports)
+uv run db/sync_ports.py
+
 # Process existing raw messages (one-shot mode)
 uv run db/decoder.py --once --batch-size 5000
 
@@ -252,6 +269,7 @@ ais-catcher.py → raw_messages (queue) → decoder.py → positions/vessels/etc
 | `latest_positions` | Trigger-maintained, one row per vessel |
 | `base_stations` | Base station reports |
 | `nav_aids` | Navigation aids |
+| `ports` | Port/location database for destination resolution |
 
 ### Key Queries
 
