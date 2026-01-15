@@ -11,3 +11,8 @@ __pycache__/
 *.swp
 *.swo
 TAGS
+
+# Database files (large, local-only)
+db/ais-data.db
+db/ais-data.db-shm
+db/ais-data.db-wal
